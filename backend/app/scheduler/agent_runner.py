@@ -444,23 +444,19 @@ async def run_agent(
             thinking_content = ""
             output_content = text_content or ""
 
-            if provider.thinking:
-                # 思考模型：尝试提取思考内容
-                if reasoning_content:
-                    thinking_content = reasoning_content
-                elif "</think" in output_content:
-                    idx = output_content.find("</think")
-                    end_pos = output_content.find(">", idx)
-                    if end_pos >= 0:
-                        thinking_content = output_content[:idx].strip()
-                        output_content = output_content[end_pos+1:].strip()
-                    else:
-                        thinking_content = output_content[:idx].strip()
-                        output_content = ""
-            else:
-                # 非思考模型：只有 API 明确返回 reasoning_content 才算
-                if reasoning_content:
-                    thinking_content = reasoning_content
+            # API 明确返回 reasoning_content 字段
+            if reasoning_content:
+                thinking_content = reasoning_content
+            # 输出中包含 </think 标签
+            elif "</think" in output_content:
+                idx = output_content.find("</think")
+                end_pos = output_content.find(">", idx)
+                if end_pos >= 0:
+                    thinking_content = output_content[:idx].strip()
+                    output_content = output_content[end_pos+1:].strip()
+                else:
+                    thinking_content = output_content[:idx].strip()
+                    output_content = ""
 
             thinking_content = _clean_thinking(thinking_content)
             round_record = {
