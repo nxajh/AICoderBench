@@ -125,7 +125,9 @@ async def init_db():
     if "thinking" not in model_columns:
         await db.execute("ALTER TABLE models ADD COLUMN thinking INTEGER DEFAULT 0")
     if "uuid" not in model_columns:
-        pass
+        # 旧 schema 用 id 作主键，重命名为 uuid
+        if "id" in model_columns:
+            await db.execute("ALTER TABLE models RENAME COLUMN id TO uuid")
 
     await db.commit()
 

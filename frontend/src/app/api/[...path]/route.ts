@@ -1,10 +1,25 @@
 import { NextResponse } from "next/server";
+import { readFileSync } from "fs";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://34.84.95.125:8000";
+let _apiBase: string | null = null;
+
+function getApiBase(): string {
+  if (_apiBase) return _apiBase;
+  // 1. 尝试从运行时配置文件读取（Docker 启动时写入）
+  try {
+    const cfg = JSON.parse(readFileSync("/app/runtime-config.json", "utf-8"));
+    _apiBase = cfg.apiUrl;
+    if (_apiBase) return _apiBase;
+  } catch {}
+  // 2. 环境变量
+  _apiBase = process.env.API_URL || process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+  return _apiBase;
+}
 
 async function proxyRequest(request: Request, method: string) {
+  const apiBase = getApiBase();
   const { pathname } = new URL(request.url);
-  const url = `${API_BASE}${pathname}`;
+  const url = `${apiBase}${pathname}`;
 
   try {
     const opts: RequestInit = { method };

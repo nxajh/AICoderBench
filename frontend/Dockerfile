@@ -12,4 +12,4 @@ COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/package.json ./
 
 EXPOSE 3000
-CMD ["npm", "start"]
+CMD /bin/sh -c 'echo "{\"apiUrl\":\"${API_URL:-http://localhost:8000}\"}" > /app/runtime-config.json && npm start'
