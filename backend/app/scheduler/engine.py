@@ -85,13 +85,16 @@ async def run_benchmark(
     model_uuids: list[str],
     providers: dict[str, ModelProvider],
     round_name: str = "",
+    round_id: str = "",
 ) -> str:
     """
-    主入口：创建 round，构建双队列，串行调度
+    主入口：创建 round，构建双队列，串行调度。
+    round_id 可由调用方预先生成（异步端点场景），若未提供则自动生成。
     """
-    round_id = f"round-{uuid.uuid4().hex[:8]}"
-    await db.create_round(round_id, problem_ids, model_uuids, round_name)
-    await db.update_round_status(round_id, "running")
+    if not round_id:
+        round_id = f"round-{uuid.uuid4().hex[:8]}"
+        await db.create_round(round_id, problem_ids, model_uuids, round_name)
+        await db.update_round_status(round_id, "running")
 
     # 构建 generation tasks
     gen_tasks: list[GenTask] = []

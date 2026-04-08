@@ -9,6 +9,7 @@ from datetime import datetime
 from typing import Optional
 
 from .config import DATABASE_URL
+from .utils import clean_thinking as _clean_thinking
 
 
 DB_PATH = DATABASE_URL.replace("sqlite:///", "")
@@ -105,6 +106,8 @@ async def init_db():
 
         CREATE INDEX IF NOT EXISTS idx_submissions_round ON submissions(round_id);
         CREATE INDEX IF NOT EXISTS idx_submissions_model ON submissions(model_uuid);
+        CREATE INDEX IF NOT EXISTS idx_submissions_problem_status ON submissions(problem_id, status);
+        CREATE INDEX IF NOT EXISTS idx_submissions_model_status ON submissions(model_uuid, status);
     """)
 
     # 迁移：添加 generation_duration 字段（如果不存在）
@@ -294,20 +297,6 @@ async def get_submissions_by_round(round_id: str) -> list[dict]:
 
 
 
-def _clean_thinking(text: str) -> str:
-    """去除思考内容的标记标签"""
-    import re as _re
-    # 去掉开头的思考标记
-    text = text.lstrip()
-    text = _re.sub(r'^[​‌‍]*', '', text)
-    text = _re.sub(r'^◀think▶\s*', '', text)
-    text = _re.sub(r'^<think[^>]*>\s*', '', text)
-    text = _re.sub(r'^ Pelosi\s*', '', text)  # zero-width space
-    # 去掉结尾的闭合标签
-    text = _re.sub(r'\s*◀/think▶\s*$', '', text)
-    text = _re.sub(r'\s*</think\s*>\s*$', '', text)
-    return text.strip()
-
 async def get_submission(round_id: str, problem_id: str, model_uuid: str) -> Optional[dict]:
     db = await get_db()
     async with db.execute(
@@ -464,6 +453,7 @@ async def get_model_stats(model_uuid: str) -> Optional[dict]:
     async with db.execute("SELECT id, title FROM problems") as cur:
         title_map = {r["id"]: r["title"] async for r in cur}
 
+    # 单次查询获取所有题目的分数统计
     async with db.execute("""
         SELECT problem_id,
                MAX(total_score) as best_score,
@@ -477,30 +467,40 @@ async def get_model_stats(model_uuid: str) -> Optional[dict]:
     """, (model_uuid,)) as cursor:
         rows = await cursor.fetchall()
 
+    # 单次查询获取所有题目的 token 用量（避免 N+1）
+    async with db.execute("""
+        SELECT problem_id, token_usage
+        FROM submissions
+        WHERE model_uuid=? AND status='done' AND token_usage IS NOT NULL AND token_usage != '' AND token_usage != '{}'
+    """, (model_uuid,)) as tcur:
+        all_token_rows = await tcur.fetchall()
+
+    # 按 problem_id 聚合 token 数据
+    token_sums: dict = {}
+    for tr in all_token_rows:
+        pid = tr["problem_id"]
+        try:
+            tu = json.loads(tr["token_usage"]) if tr["token_usage"] else {}
+            if tu:
+                if pid not in token_sums:
+                    token_sums[pid] = {"prompt": 0, "completion": 0, "total": 0, "count": 0}
+                token_sums[pid]["prompt"] += tu.get("prompt_tokens", tu.get("prompt", 0))
+                token_sums[pid]["completion"] += tu.get("completion_tokens", tu.get("completion", 0))
+                token_sums[pid]["total"] += tu.get("total_tokens", tu.get("total", 0))
+                token_sums[pid]["count"] += 1
+        except (json.JSONDecodeError, TypeError):
+            pass
+
     problems = []
     for row in rows:
         pid = row["problem_id"]
-        async with db.execute("""
-            SELECT token_usage FROM submissions
-            WHERE model_uuid=? AND problem_id=? AND status='done'
-        """, (model_uuid, pid)) as tcur:
-            token_rows = await tcur.fetchall()
-
-        avg_tokens = {"prompt": 0, "completion": 0, "total": 0}
-        valid_count = 0
-        for tr in token_rows:
-            try:
-                tu = json.loads(tr["token_usage"]) if tr["token_usage"] else {}
-                if tu:
-                    avg_tokens["prompt"] += tu.get("prompt_tokens", tu.get("prompt", 0))
-                    avg_tokens["completion"] += tu.get("completion_tokens", tu.get("completion", 0))
-                    avg_tokens["total"] += tu.get("total_tokens", tu.get("total", 0))
-                    valid_count += 1
-            except (json.JSONDecodeError, TypeError):
-                pass
-        if valid_count > 0:
-            avg_tokens = {k: round(v / valid_count) for k, v in avg_tokens.items()}
-
+        ts = token_sums.get(pid, {})
+        n = ts.get("count", 0)
+        avg_tokens = {
+            "prompt": round(ts["prompt"] / n) if n else 0,
+            "completion": round(ts["completion"] / n) if n else 0,
+            "total": round(ts["total"] / n) if n else 0,
+        }
         problems.append({
             "problem_id": pid,
             "title": title_map.get(pid, pid),
@@ -622,35 +622,50 @@ async def get_problem_leaderboard(problem_id: str, limit: int = 10) -> list[dict
         for r in await cur.fetchall():
             model_info[r["uuid"]] = dict(r)
 
+    # 单次查询获取每个模型的最佳提交详情（按 total_score DESC 取第一条）
+    # 用 ROW_NUMBER 窗口函数避免 N+1
+    if rows:
+        model_uuids_str = ",".join("?" for _ in rows)
+        async with db.execute(
+            f"""
+            SELECT model_uuid, round_id, token_usage, generation_duration, raw_output
+            FROM (
+                SELECT model_uuid, round_id, token_usage, generation_duration, raw_output,
+                       ROW_NUMBER() OVER (PARTITION BY model_uuid ORDER BY total_score DESC) as rn
+                FROM submissions
+                WHERE problem_id=? AND status='done'
+                  AND model_uuid IN ({model_uuids_str})
+            ) WHERE rn = 1
+            """,
+            [problem_id] + [r["model_uuid"] for r in rows]
+        ) as bcur:
+            best_rows = {r["model_uuid"]: r for r in await bcur.fetchall()}
+    else:
+        best_rows = {}
+
     result = []
     for row in rows:
         muuid = row["model_uuid"]
         info = model_info.get(muuid, {})
-        # 查找该模型在该题的最佳提交的 round_id、token、耗时、轮次
-        best_round_id = ""
+        brow = best_rows.get(muuid)
+        best_round_id = brow["round_id"] if brow else ""
         best_tokens = 0
         best_duration = 0.0
         best_rounds = 0
-        async with db.execute(
-            "SELECT round_id, token_usage, generation_duration, raw_output FROM submissions WHERE model_uuid=? AND problem_id=? AND status='done' ORDER BY total_score DESC LIMIT 1",
-            (muuid, problem_id)
-        ) as bcur:
-            brow = await bcur.fetchone()
-            if brow:
-                best_round_id = brow["round_id"]
-                tu = brow["token_usage"]
-                if tu:
-                    try:
-                        best_tokens = json.loads(tu).get("total_tokens", 0)
-                    except (json.JSONDecodeError, TypeError):
-                        pass
-                best_duration = brow["generation_duration"] or 0
-                raw = brow["raw_output"]
-                if raw:
-                    try:
-                        best_rounds = len(json.loads(raw))
-                    except (json.JSONDecodeError, TypeError):
-                        pass
+        if brow:
+            tu = brow["token_usage"]
+            if tu:
+                try:
+                    best_tokens = json.loads(tu).get("total_tokens", 0)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            best_duration = brow["generation_duration"] or 0
+            raw = brow["raw_output"]
+            if raw:
+                try:
+                    best_rounds = len(json.loads(raw))
+                except (json.JSONDecodeError, TypeError):
+                    pass
         result.append({
             "model_uuid": muuid,
             "provider": info.get("provider", ""),

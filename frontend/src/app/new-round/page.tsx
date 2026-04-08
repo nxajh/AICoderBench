@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import Link from "next/link";
 import Nav from "@/components/nav";
 import ModelBadge from "@/components/model-badge";
@@ -107,14 +107,12 @@ export default function NewRoundPage() {
         setSubmitting(false);
         return;
       }
-      // Find the new round (latest one)
-      const roundsRes = await fetch("/api/rounds");
-      const rounds: RoundInfo[] = await roundsRes.json();
-      const newRound = rounds.find(r => r.status === "running");
-      if (newRound) {
-        setActiveRoundId(newRound.id);
-        await pollRound(newRound.id);
-        pollRef.current = setInterval(() => pollRound(newRound.id), 3000);
+      // 直接使用响应中返回的 round_id，无需二次查询
+      const roundId: string = data.round_id || data.id;
+      if (roundId) {
+        setActiveRoundId(roundId);
+        await pollRound(roundId);
+        pollRef.current = setInterval(() => pollRound(roundId), 3000);
       }
       setSubmitting(false);
     } catch (e) {
@@ -123,10 +121,10 @@ export default function NewRoundPage() {
     }
   };
 
-  // Cleanup polling on unmount
+  // Cleanup polling on unmount 或 activeRoundId 变化时
   useEffect(() => {
-    return () => { if (pollRef.current) clearInterval(pollRef.current); };
-  }, []);
+    return () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
+  }, [activeRoundId]);
 
   const statusIcon = (status: string) => {
     switch (status) {
@@ -139,6 +137,12 @@ export default function NewRoundPage() {
   };
 
   const totalTasks = selectedProblems.size * selectedModels.size;
+
+  // 预计算 Map 避免 submission 列表中 O(N²) 的 models.find()
+  const modelMap = useMemo(
+    () => new Map(models.map(m => [m.uuid, m])),
+    [models]
+  );
 
   return (
     <>
@@ -298,7 +302,7 @@ export default function NewRoundPage() {
                       <span className="text-xs text-gray-500 mx-2">·</span>
                       <span className="text-xs text-gray-400">
                         {(() => {
-                          const m = models.find(m => m.uuid === s.model_uuid);
+                          const m = modelMap.get(s.model_uuid);
                           return m ? <ModelBadge model={m.api_model} provider={m.provider} thinking={m.thinking} /> : s.model_uuid.slice(0, 8);
                         })()}
                       </span>

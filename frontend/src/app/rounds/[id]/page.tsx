@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import Nav from "@/components/nav";
 import ModelBadge from "@/components/model-badge";
 import { fetchAPI, Submission, LeaderboardEntry, RoundInfo, Problem } from "@/lib/api";
@@ -11,6 +11,7 @@ export default function RoundDetailPage({ params }: { params: { id: string } }) 
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [filterProblem, setFilterProblem] = useState<string>("all");
   const [problemMap, setProblemMap] = useState<Record<string, Problem>>({});
 
@@ -29,10 +30,12 @@ export default function RoundDetailPage({ params }: { params: { id: string } }) 
       `/api/rounds/${params.id}`
     )
       .then((d) => { setRound(d.round); setLeaderboard(d.leaderboard); setSubmissions(d.submissions); setLoading(false); })
-      .catch(() => setLoading(false));
+      .catch((e: Error) => { setError(e.message || "加载失败"); setLoading(false); });
   }, [params.id]);
 
   if (loading) return <><Nav /><div className="max-w-7xl mx-auto px-4 py-8 text-gray-400">加载中...</div></>;
+
+  if (error) return <><Nav /><div className="max-w-7xl mx-auto px-4 py-8 text-red-400">加载失败：{error}</div></>;
 
   if (!round) return <><Nav /><div className="max-w-7xl mx-auto px-4 py-8 text-red-400">Round 不存在</div></>;
 
@@ -40,13 +43,15 @@ export default function RoundDetailPage({ params }: { params: { id: string } }) 
     ? submissions
     : submissions.filter((s) => s.problem_id === filterProblem);
 
-  // Build score matrix
-  const scoreMap: Record<string, Record<string, number>> = {};
-  submissions.forEach((s) => {
-    if (!scoreMap[s.model_uuid]) scoreMap[s.model_uuid] = {};
-    scoreMap[s.model_uuid][s.problem_id] = s.total_score;
-  });
-  const modelUuids = Object.keys(scoreMap);
+  // Build score matrix（useMemo 避免每次渲染重建）
+  const { scoreMap, modelUuids } = useMemo(() => {
+    const map: Record<string, Record<string, number>> = {};
+    submissions.forEach((s) => {
+      if (!map[s.model_uuid]) map[s.model_uuid] = {};
+      map[s.model_uuid][s.problem_id] = s.total_score;
+    });
+    return { scoreMap: map, modelUuids: Object.keys(map) };
+  }, [submissions]);
 
   return (
     <>
