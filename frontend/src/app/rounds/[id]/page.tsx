@@ -33,16 +33,7 @@ export default function RoundDetailPage({ params }: { params: { id: string } }) 
       .catch((e: Error) => { setError(e.message || "加载失败"); setLoading(false); });
   }, [params.id]);
 
-  if (loading) return <><Nav /><div className="max-w-7xl mx-auto px-4 py-8 text-gray-400">加载中...</div></>;
-
-  if (error) return <><Nav /><div className="max-w-7xl mx-auto px-4 py-8 text-red-400">加载失败：{error}</div></>;
-
-  if (!round) return <><Nav /><div className="max-w-7xl mx-auto px-4 py-8 text-red-400">Round 不存在</div></>;
-
-  const filtered = filterProblem === "all"
-    ? submissions
-    : submissions.filter((s) => s.problem_id === filterProblem);
-
+  // ⚠️ Hooks must be called unconditionally, before any early returns
   // Build score matrix（useMemo 避免每次渲染重建）
   const { scoreMap, modelUuids } = useMemo(() => {
     const map: Record<string, Record<string, number>> = {};
@@ -52,6 +43,16 @@ export default function RoundDetailPage({ params }: { params: { id: string } }) 
     });
     return { scoreMap: map, modelUuids: Object.keys(map) };
   }, [submissions]);
+
+  const filtered = filterProblem === "all"
+    ? submissions
+    : submissions.filter((s) => s.problem_id === filterProblem);
+
+  if (loading) return <><Nav /><div className="max-w-7xl mx-auto px-4 py-8 text-gray-400">加载中...</div></>;
+
+  if (error) return <><Nav /><div className="max-w-7xl mx-auto px-4 py-8 text-red-400">加载失败：{error}</div></>;
+
+  if (!round) return <><Nav /><div className="max-w-7xl mx-auto px-4 py-8 text-red-400">Round 不存在</div></>;
 
   return (
     <>
