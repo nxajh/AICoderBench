@@ -1,0 +1,25 @@
+{
+  "id": "01-rate-limiter",
+  "title": "高并发滑动窗口限流器",
+  "difficulty": "medium",
+  "language": "c",
+  "tags": [
+    "concurrency",
+    "lock",
+    "hash-table",
+    "sliding-window"
+  ],
+  "compile_flags": "-lpthread",
+  "timeout_seconds": 10,
+  "has_benchmark": false,
+  "scoring": {
+    "compile": 10,
+    "tests": 25,
+    "safety": 25,
+    "quality": 15,
+    "resource": 15,
+    "performance": 10
+  },
+  "concurrent": true,
+  "perf_baseline_ms": 0
+}

@@ -1,0 +1,23 @@
+{
+  "id": "07-cow-container",
+  "title": "写时复制动态数组",
+  "difficulty": "hard",
+  "tags": [
+    "copy-on-write",
+    "reference-counting",
+    "atomic"
+  ],
+  "language": "c",
+  "compile_flags": "-lpthread",
+  "timeout_seconds": 10,
+  "scoring": {
+    "compile": 10,
+    "tests": 25,
+    "safety": 25,
+    "quality": 15,
+    "resource": 15,
+    "performance": 10
+  },
+  "concurrent": false,
+  "perf_baseline_ms": 0
+}

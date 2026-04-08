@@ -1,0 +1,24 @@
+{
+  "id": "04-thread-safe-lru-cache",
+  "title": "线程安全LRU缓存",
+  "difficulty": "medium",
+  "tags": [
+    "concurrency",
+    "lock",
+    "hash-table",
+    "linked-list"
+  ],
+  "language": "c",
+  "compile_flags": "-lpthread",
+  "timeout_seconds": 10,
+  "scoring": {
+    "compile": 10,
+    "tests": 25,
+    "safety": 25,
+    "quality": 15,
+    "resource": 15,
+    "performance": 10
+  },
+  "concurrent": true,
+  "perf_baseline_ms": 0
+}

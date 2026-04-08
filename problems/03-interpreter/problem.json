@@ -1,0 +1,23 @@
+{
+  "id": "03-interpreter",
+  "title": "递归下降表达式解释器",
+  "difficulty": "medium",
+  "tags": [
+    "parser",
+    "recursive-descent",
+    "string"
+  ],
+  "language": "c",
+  "compile_flags": "-lm",
+  "timeout_seconds": 10,
+  "scoring": {
+    "compile": 10,
+    "tests": 25,
+    "safety": 25,
+    "quality": 15,
+    "resource": 15,
+    "performance": 10
+  },
+  "concurrent": false,
+  "perf_baseline_ms": 0
+}

@@ -1,0 +1,24 @@
+{
+  "id": "10-event-loop",
+  "title": "定时器与回调事件循环",
+  "difficulty": "hard",
+  "tags": [
+    "event-loop",
+    "timer",
+    "callback",
+    "heap"
+  ],
+  "language": "c",
+  "compile_flags": "-lpthread",
+  "timeout_seconds": 15,
+  "scoring": {
+    "compile": 10,
+    "tests": 25,
+    "safety": 25,
+    "quality": 15,
+    "resource": 15,
+    "performance": 10
+  },
+  "concurrent": false,
+  "perf_baseline_ms": 0
+}

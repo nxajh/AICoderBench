@@ -1,0 +1,23 @@
+{
+  "id": "02-ring-buffer",
+  "title": "无锁SPSC环形缓冲区",
+  "difficulty": "easy",
+  "tags": [
+    "lock-free",
+    "atomic",
+    "circular-buffer"
+  ],
+  "language": "c",
+  "compile_flags": "-lm",
+  "timeout_seconds": 10,
+  "scoring": {
+    "compile": 10,
+    "tests": 25,
+    "safety": 25,
+    "quality": 15,
+    "resource": 15,
+    "performance": 10
+  },
+  "concurrent": true,
+  "perf_baseline_ms": 0
+}

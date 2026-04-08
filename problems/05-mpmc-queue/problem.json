@@ -1,0 +1,24 @@
+{
+  "id": "05-mpmc-queue",
+  "title": "MPMC有界阻塞队列",
+  "difficulty": "hard",
+  "tags": [
+    "concurrency",
+    "condition-variable",
+    "mutex",
+    "blocking-queue"
+  ],
+  "language": "c",
+  "compile_flags": "-lpthread",
+  "timeout_seconds": 15,
+  "scoring": {
+    "compile": 10,
+    "tests": 25,
+    "safety": 25,
+    "quality": 15,
+    "resource": 15,
+    "performance": 10
+  },
+  "concurrent": true,
+  "perf_baseline_ms": 0
+}

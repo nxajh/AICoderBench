@@ -1,0 +1,28 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./problems:/app/problems:ro
+      - eval-data:/app/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - DATABASE_URL=sqlite:////app/data/aicoderbench.db
+    depends_on: []
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://backend:8000
+    depends_on:
+      - backend
+
+volumes:
+  eval-data:

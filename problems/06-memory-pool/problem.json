@@ -1,0 +1,23 @@
+{
+  "id": "06-memory-pool",
+  "title": "固定块内存池分配器",
+  "difficulty": "easy",
+  "tags": [
+    "memory",
+    "linked-list",
+    "allocation"
+  ],
+  "language": "c",
+  "compile_flags": "",
+  "timeout_seconds": 10,
+  "scoring": {
+    "compile": 10,
+    "tests": 25,
+    "safety": 25,
+    "quality": 15,
+    "resource": 15,
+    "performance": 10
+  },
+  "concurrent": true,
+  "perf_baseline_ms": 0
+}

@@ -1,0 +1,23 @@
+{
+  "id": "08-concurrent-hashmap",
+  "title": "分段锁并发哈希表",
+  "difficulty": "medium",
+  "tags": [
+    "concurrency",
+    "hash-table",
+    "segment-lock"
+  ],
+  "language": "c",
+  "compile_flags": "-lpthread",
+  "timeout_seconds": 10,
+  "scoring": {
+    "compile": 10,
+    "tests": 25,
+    "safety": 25,
+    "quality": 15,
+    "resource": 15,
+    "performance": 10
+  },
+  "concurrent": true,
+  "perf_baseline_ms": 0
+}
