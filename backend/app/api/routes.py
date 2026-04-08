@@ -310,9 +310,10 @@ async def model_stats(model_uuid: str):
 @router.post("/rounds")
 async def create_round(req: CreateRoundRequest, background_tasks: BackgroundTasks):
     """创建并启动一轮评测（后台运行）"""
-    all_problems = list_problems()
-    problem_ids = req.problem_ids or [p.id for p in all_problems]
-    valid_problems = [p.id for p in all_problems if p.id in problem_ids]
+    all_problems = await db.list_problems_db()
+    all_uuids = {p["uuid"] for p in all_problems}
+    problem_ids = req.problem_ids or list(all_uuids)
+    valid_problems = [pid for pid in problem_ids if pid in all_uuids]
     if not valid_problems:
         raise HTTPException(400, "No valid problems found")
 
@@ -346,9 +347,10 @@ async def create_round(req: CreateRoundRequest, background_tasks: BackgroundTask
 @router.post("/rounds/sync")
 async def create_round_sync(req: CreateRoundRequest):
     """同步运行一轮评测（阻塞等待结果）"""
-    all_problems = list_problems()
-    problem_ids = req.problem_ids or [p.id for p in all_problems]
-    valid_problems = [p.id for p in all_problems if p.id in problem_ids]
+    all_problems = await db.list_problems_db()
+    all_uuids = {p["uuid"] for p in all_problems}
+    problem_ids = req.problem_ids or list(all_uuids)
+    valid_problems = [pid for pid in problem_ids if pid in all_uuids]
     if not valid_problems:
         raise HTTPException(400, "No valid problems found")
 
