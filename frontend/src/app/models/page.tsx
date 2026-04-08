@@ -148,10 +148,10 @@ export default function ModelsPage() {
     }
   };
 
-  const handleDelete = async (id: string) => {
-    if (!confirm(`确定删除模型 "${id}"？`)) return;
+  const handleDelete = async (uuid: string) => {
+    if (!confirm(`确定删除模型 "${uuid}"？`)) return;
     try {
-      const res = await fetch(`/api/model-configs/${id}`, { method: "DELETE" });
+      const res = await fetch(`/api/model-configs/${uuid}`, { method: "DELETE" });
       if (!res.ok) throw new Error("删除失败");
       await load();
     } catch (e) {

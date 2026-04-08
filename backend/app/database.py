@@ -696,6 +696,7 @@ async def list_model_configs() -> list[dict]:
             d["api_key_masked"] = _mask_key(d.get("api_key", ""))
             d.pop("api_key", None)
             d.pop("name", None)
+            d.pop("provider_type", None)
             d["enabled"] = bool(d.get("enabled", 1))
             d["thinking"] = bool(d.get("thinking", 0))
             result.append(d)
