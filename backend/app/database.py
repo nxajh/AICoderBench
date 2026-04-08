@@ -22,7 +22,7 @@ VALID_SUBMISSION_COLUMNS = {
     "status", "generated_code", "raw_output", "used_tool_call",
     "generation_error", "eval_result", "total_score", "score_breakdown",
     "created_at", "finished_at", "generation_duration", "token_usage",
-    "model_uuid", "model_id", "prompt",
+    "model_uuid", "prompt",
 }
 
 VALID_MODEL_COLUMNS = {
@@ -129,6 +129,8 @@ async def init_db():
     # 迁移：submissions model_uuid 为空时用 model_id 填充（仅旧库有 model_id 列时执行）
     if "model_id" in columns:
         await db.execute("UPDATE submissions SET model_uuid = model_id WHERE model_uuid = '' AND model_id != ''")
+        # 删除 model_id 列以消除 NOT NULL 约束对新 INSERT 的影响（SQLite 3.35+）
+        await db.execute("ALTER TABLE submissions DROP COLUMN model_id")
 
     # 迁移：扩展 models 表
     cursor = await db.execute("PRAGMA table_info(models)")
