@@ -126,8 +126,9 @@ async def init_db():
     if "model_ids" in round_columns and "model_uuids" not in round_columns:
         await db.execute("ALTER TABLE rounds RENAME COLUMN model_ids TO model_uuids")
 
-    # 迁移：submissions model_uuid 为空时用 model_id 填充
-    await db.execute("UPDATE submissions SET model_uuid = model_id WHERE model_uuid = '' AND model_id != ''")
+    # 迁移：submissions model_uuid 为空时用 model_id 填充（仅旧库有 model_id 列时执行）
+    if "model_id" in columns:
+        await db.execute("UPDATE submissions SET model_uuid = model_id WHERE model_uuid = '' AND model_id != ''")
 
     # 迁移：扩展 models 表
     cursor = await db.execute("PRAGMA table_info(models)")
@@ -172,15 +173,17 @@ async def init_db():
     rows = await db.execute_fetchall("SELECT uuid, slug FROM problems WHERE uuid IS NOT NULL AND slug IS NOT NULL")
     for row in rows:
         slug_to_uuid[row["slug"]] = row["uuid"]
-    for slug, puuid in slug_to_uuid.items():
-        await db.execute("UPDATE submissions SET problem_id=? WHERE problem_id=?", (puuid, slug))
-        # rounds 的 problem_ids 是 JSON 数组
+    if slug_to_uuid:
+        # 一次性读取所有 rounds，避免在循环内重复查询（N+1 → 1+N）
         rounds_rows = await db.execute_fetchall("SELECT id, problem_ids FROM rounds")
-        for rr in rounds_rows:
-            pids = json.loads(rr["problem_ids"])
-            if slug in pids:
-                pids = [puuid if p == slug else p for p in pids]
-                await db.execute("UPDATE rounds SET problem_ids=? WHERE id=?", (json.dumps(pids), rr["id"]))
+        for slug, puuid in slug_to_uuid.items():
+            await db.execute("UPDATE submissions SET problem_id=? WHERE problem_id=?", (puuid, slug))
+            # 更新 rounds 的 problem_ids JSON 数组
+            for rr in rounds_rows:
+                pids = json.loads(rr["problem_ids"])
+                if slug in pids:
+                    pids = [puuid if p == slug else p for p in pids]
+                    await db.execute("UPDATE rounds SET problem_ids=? WHERE id=?", (json.dumps(pids), rr["id"]))
 
     await db.commit()
 
@@ -257,8 +260,8 @@ async def create_submission(round_id: str, problem_id: str, model_uuid: str) -> 
     if row:
         return row[0]
     cur = await db.execute(
-        "INSERT INTO submissions (round_id, problem_id, model_id, model_uuid, status, created_at) VALUES (?, ?, ?, ?, 'pending', ?)",
-        (round_id, problem_id, model_uuid, model_uuid, now)
+        "INSERT INTO submissions (round_id, problem_id, model_uuid, status, created_at) VALUES (?, ?, ?, 'pending', ?)",
+        (round_id, problem_id, model_uuid, now)
     )
     await db.commit()
     return cur.lastrowid
@@ -815,12 +818,14 @@ async def _seed_problems():
         # 新题，插入
         new_uuid = f"p-{uuid.uuid4().hex[:12]}"
         scoring = meta.get("scoring", {})
+        # id 存储 problem.json 中定义的原始 ID（如 "06-memory-pool"），而非 uuid
+        problem_id = meta.get("id", slug)
         await db.execute(
-            """INSERT OR IGNORE INTO problems 
-            (uuid, slug, id, title, difficulty, language, tags, compile_flags, 
+            """INSERT OR IGNORE INTO problems
+            (uuid, slug, id, title, difficulty, language, tags, compile_flags,
              timeout_seconds, scoring, has_benchmark, concurrent, perf_baseline_ms)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (new_uuid, slug, new_uuid, meta.get("title", slug),
+            (new_uuid, slug, problem_id, meta.get("title", slug),
              meta.get("difficulty", "medium"), meta.get("language", "c"),
              json.dumps(meta.get("tags", [])), meta.get("compile_flags", ""),
              meta.get("timeout_seconds", 30), json.dumps(scoring),
