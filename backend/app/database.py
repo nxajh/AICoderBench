@@ -44,14 +44,20 @@ async def init_db():
     db = await get_db()
     await db.executescript("""
         CREATE TABLE IF NOT EXISTS problems (
-            id TEXT PRIMARY KEY,
+            uuid TEXT NOT NULL,
+            slug TEXT NOT NULL UNIQUE,
+            id TEXT NOT NULL,
             title TEXT NOT NULL,
             difficulty TEXT DEFAULT 'medium',
             language TEXT DEFAULT 'c',
             tags TEXT DEFAULT '[]',
             compile_flags TEXT DEFAULT '',
             timeout_seconds INTEGER DEFAULT 30,
-            scoring TEXT DEFAULT '{}'
+            scoring TEXT DEFAULT '{}',
+            has_benchmark INTEGER DEFAULT 0,
+            concurrent INTEGER DEFAULT 1,
+            perf_baseline_ms INTEGER DEFAULT 100,
+            PRIMARY KEY (uuid)
         );
 
         CREATE TABLE IF NOT EXISTS models (
@@ -138,7 +144,45 @@ async def init_db():
         if "id" in model_columns:
             await db.execute("ALTER TABLE models RENAME COLUMN id TO uuid")
 
+    # 迁移：problems 表加 uuid/slug 及新字段
+    cursor = await db.execute("PRAGMA table_info(problems)")
+    problem_columns = [row[1] for row in await cursor.fetchall()]
+    if "uuid" not in problem_columns:
+        await db.execute("ALTER TABLE problems ADD COLUMN uuid TEXT")
+    if "slug" not in problem_columns:
+        await db.execute("ALTER TABLE problems ADD COLUMN slug TEXT")
+    if "has_benchmark" not in problem_columns:
+        await db.execute("ALTER TABLE problems ADD COLUMN has_benchmark INTEGER DEFAULT 0")
+    if "concurrent" not in problem_columns:
+        await db.execute("ALTER TABLE problems ADD COLUMN concurrent INTEGER DEFAULT 1")
+    if "perf_baseline_ms" not in problem_columns:
+        await db.execute("ALTER TABLE problems ADD COLUMN perf_baseline_ms INTEGER DEFAULT 100")
+    # 为已有记录生成 uuid 和 slug
+    needs_migrate = await db.execute_fetchall("SELECT id FROM problems WHERE uuid IS NULL")
+    for row in needs_migrate:
+        new_uuid = f"p-{uuid.uuid4().hex[:12]}"
+        await db.execute("UPDATE problems SET uuid=?, slug=? WHERE id=?", (new_uuid, row["id"], row["id"]))
+
+    # 迁移：submissions problem_id 从 slug 改为 uuid
+    # 先建立 slug->uuid 映射
+    slug_to_uuid = {}
+    rows = await db.execute_fetchall("SELECT uuid, slug FROM problems WHERE uuid IS NOT NULL AND slug IS NOT NULL")
+    for row in rows:
+        slug_to_uuid[row["slug"]] = row["uuid"]
+    for slug, puuid in slug_to_uuid.items():
+        await db.execute("UPDATE submissions SET problem_id=? WHERE problem_id=?", (puuid, slug))
+        # rounds 的 problem_ids 是 JSON 数组
+        rounds_rows = await db.execute_fetchall("SELECT id, problem_ids FROM rounds")
+        for rr in rounds_rows:
+            pids = json.loads(rr["problem_ids"])
+            if slug in pids:
+                pids = [puuid if p == slug else p for p in pids]
+                await db.execute("UPDATE rounds SET problem_ids=? WHERE id=?", (json.dumps(pids), rr["id"]))
+
     await db.commit()
+
+    # Seed：从文件系统同步题目到数据库
+    await _seed_problems()
 
 
 # ---- Round 操作 ----
@@ -733,3 +777,96 @@ def _mask_key(key: str) -> str:
     if not key or len(key) < 12:
         return "****" if key else ""
     return f"{key[:4]}...{key[-4:]}"
+
+
+# ---- Problem 操作 ----
+
+async def _seed_problems():
+    """从文件系统同步题目到数据库"""
+    from .config import PROBLEMS_DIR
+    if not PROBLEMS_DIR.exists():
+        return
+    db = await get_db()
+    for d in sorted(PROBLEMS_DIR.iterdir()):
+        json_path = d / "problem.json"
+        if not d.is_dir() or not json_path.exists():
+            continue
+        meta = json.loads(json_path.read_text())
+        slug = d.name
+        # 检查是否已存在（按 slug 查找）
+        existing = await db.execute_fetchall("SELECT uuid FROM problems WHERE slug=?", (slug,))
+        if existing:
+            continue
+        # 新题，插入
+        new_uuid = f"p-{uuid.uuid4().hex[:12]}"
+        scoring = meta.get("scoring", {})
+        await db.execute(
+            """INSERT OR IGNORE INTO problems 
+            (uuid, slug, id, title, difficulty, language, tags, compile_flags, 
+             timeout_seconds, scoring, has_benchmark, concurrent, perf_baseline_ms)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (new_uuid, slug, new_uuid, meta.get("title", slug),
+             meta.get("difficulty", "medium"), meta.get("language", "c"),
+             json.dumps(meta.get("tags", [])), meta.get("compile_flags", ""),
+             meta.get("timeout_seconds", 30), json.dumps(scoring),
+             int(meta.get("has_benchmark", False)), int(meta.get("concurrent", True)),
+             meta.get("perf_baseline_ms", 100))
+        )
+    await db.commit()
+
+
+async def list_problems_db() -> list[dict]:
+    """列出所有题目（从数据库）"""
+    db = await get_db()
+    rows = await db.execute_fetchall("SELECT * FROM problems ORDER BY slug")
+    result = []
+    for r in rows:
+        d = dict(r)
+        d["tags"] = json.loads(d.get("tags", "[]"))
+        d["scoring"] = json.loads(d.get("scoring", "{}"))
+        d["has_benchmark"] = bool(d.get("has_benchmark", 0))
+        d["concurrent"] = bool(d.get("concurrent", 1))
+        result.append(d)
+    return result
+
+
+async def get_problem_by_uuid(puuid: str) -> Optional[dict]:
+    """通过 uuid 获取题目"""
+    db = await get_db()
+    rows = await db.execute_fetchall("SELECT * FROM problems WHERE uuid=?", (puuid,))
+    if not rows:
+        return None
+    d = dict(rows[0])
+    d["tags"] = json.loads(d.get("tags", "[]"))
+    d["scoring"] = json.loads(d.get("scoring", "{}"))
+    d["has_benchmark"] = bool(d.get("has_benchmark", 0))
+    d["concurrent"] = bool(d.get("concurrent", 1))
+    return d
+
+
+async def get_problem_by_slug(slug: str) -> Optional[dict]:
+    """通过 slug（目录名）获取题目"""
+    db = await get_db()
+    rows = await db.execute_fetchall("SELECT * FROM problems WHERE slug=?", (slug,))
+    if not rows:
+        return None
+    d = dict(rows[0])
+    d["tags"] = json.loads(d.get("tags", "[]"))
+    d["scoring"] = json.loads(d.get("scoring", "{}"))
+    d["has_benchmark"] = bool(d.get("has_benchmark", 0))
+    d["concurrent"] = bool(d.get("concurrent", 1))
+    return d
+
+
+async def get_problem_uuid_by_slug(slug: str) -> Optional[str]:
+    """通过 slug 获取 uuid"""
+    db = await get_db()
+    rows = await db.execute_fetchall("SELECT uuid FROM problems WHERE slug=?", (slug,))
+    return rows[0]["uuid"] if rows else None
+
+
+async def get_problem_slug_by_uuid(puuid: str) -> Optional[str]:
+    """通过 uuid 获取 slug"""
+    db = await get_db()
+    rows = await db.execute_fetchall("SELECT slug FROM problems WHERE uuid=?", (puuid,))
+    return rows[0]["slug"] if rows else None

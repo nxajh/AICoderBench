@@ -45,6 +45,7 @@ class GenCheckpoint:
 class GenTask:
     """Generation 阶段的任务"""
     problem: Problem
+    problem_uuid: str  # 数据库 uuid
     model_uuid: str
     provider: ModelProvider
     sub_id: int = 0
@@ -95,7 +96,9 @@ async def run_benchmark(
     # 构建 generation tasks
     gen_tasks: list[GenTask] = []
     for pid in problem_ids:
-        problem = load_problem(pid)
+        # pid 可能是 uuid，需要转为 slug 来加载文件
+        slug = await db.get_problem_slug_by_uuid(pid)
+        problem = load_problem(slug or pid)
         if not problem:
             logger.warning(f"Problem not found: {pid}")
             continue
@@ -103,7 +106,7 @@ async def run_benchmark(
             if mid not in providers:
                 logger.warning(f"Model not configured: {mid}")
                 continue
-            gen_tasks.append(GenTask(problem=problem, model_uuid=mid, provider=providers[mid]))
+            gen_tasks.append(GenTask(problem=problem, problem_uuid=pid, model_uuid=mid, provider=providers[mid]))
 
     if not gen_tasks:
         await db.update_round_status(round_id, "failed")
@@ -113,7 +116,7 @@ async def run_benchmark(
 
     # 为每个 task 创建 DB submission 并记录 sub_id
     for task in gen_tasks:
-        task.sub_id = await db.create_submission(round_id, task.problem.id, task.model_uuid)
+        task.sub_id = await db.create_submission(round_id, task.problem_uuid, task.model_uuid)
 
     # Evaluation queue：generation 完成后推入
     eval_queue: list[EvalTask] = []
@@ -156,7 +159,7 @@ async def _run_generation_phase(
 
     for task in gen_tasks:
         # 跳过已完成的（断点续跑场景）
-        existing = await db.get_submission(round_id, task.problem.id, task.model_uuid)
+        existing = await db.get_submission(round_id, task.problem_uuid, task.model_uuid)
         if existing and existing["status"] in ("done", "failed", "generated", "evaluating"):
             logger.info(f"Skipping {task.problem.id}/{task.model_uuid}: already {existing['status']}")
             continue
@@ -188,7 +191,7 @@ async def _run_generation_phase(
                     logger.warning(f"[{task.model_uuid}] {task.problem.id}: 429 exhausted, checkpointing")
                     task.status = "checkpointed"
                     task.checkpoint = GenCheckpoint(
-                        problem_id=task.problem.id,
+                        problem_id=task.problem_uuid,
                         model_uuid=task.model_uuid,
                     )
                     await db.update_submission(

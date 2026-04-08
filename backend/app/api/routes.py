@@ -1,6 +1,7 @@
 """
 AICoderBench API 路由
 """
+import json
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 from typing import Optional
 from pydantic import BaseModel
@@ -98,15 +99,33 @@ async def problem_leaderboard(problem_id: str):
 
 @router.get("/problems")
 async def get_problems():
-    return list_problems()
+    """列出所有题目（从数据库获取元数据，从文件获取内容）"""
+    problems_meta = await db.list_problems_db()
+    result = []
+    for p in problems_meta:
+        try:
+            file_data = load_problem(p["slug"])
+            result.append({**p, "description": file_data.description, "interface_h": file_data.interface_h})
+        except FileNotFoundError:
+            result.append(p)
+    return result
 
 
 @router.get("/problems/{problem_id}")
 async def get_problem(problem_id: str):
-    try:
-        return load_problem(problem_id)
-    except FileNotFoundError:
+    """获取单个题目。支持 uuid 或 slug"""
+    # 先尝试 uuid
+    p = await db.get_problem_by_uuid(problem_id)
+    if not p:
+        # 再尝试 slug
+        p = await db.get_problem_by_slug(problem_id)
+    if not p:
         raise HTTPException(404, f"Problem '{problem_id}' not found")
+    try:
+        file_data = load_problem(p["slug"])
+        return {**p, "description": file_data.description, "interface_h": file_data.interface_h}
+    except FileNotFoundError:
+        return p
 
 
 @router.post("/problems")
@@ -118,7 +137,7 @@ async def create_problem_api(req: CreateProblemRequest):
     if not req.title.strip():
         raise HTTPException(400, "标题不能为空")
     try:
-        return create_problem(
+        prob = create_problem(
             id=req.id,
             title=req.title,
             difficulty=req.difficulty,
@@ -130,6 +149,11 @@ async def create_problem_api(req: CreateProblemRequest):
             description=req.description,
             interface_h=req.interface_h,
         )
+        # 重新 seed 让数据库同步
+        await db._seed_problems()
+        # 返回带 uuid 的版本
+        p = await db.get_problem_by_slug(req.id)
+        return p if p else prob.model_dump()
     except FileExistsError as e:
         raise HTTPException(409, str(e))
 
@@ -137,11 +161,26 @@ async def create_problem_api(req: CreateProblemRequest):
 @router.put("/problems/{problem_id}")
 async def update_problem_api(problem_id: str, req: UpdateProblemRequest):
     """更新题目"""
+    # 查找 slug
+    slug = problem_id
+    p = await db.get_problem_by_uuid(problem_id)
+    if p:
+        slug = p["slug"]
     try:
-        return update_problem(
-            problem_id=problem_id,
+        updated = update_problem(
+            problem_id=slug,
             **{k: v for k, v in req.model_dump().items() if v is not None},
         )
+        # 同步数据库
+        upd = {k: v for k, v in req.model_dump().items() if v is not None}
+        if upd:
+            conn = await db.get_db()
+            sets = ", ".join(f"{k}=?" for k in upd if k in ("title", "difficulty", "tags", "compile_flags", "timeout_seconds", "scoring"))
+            vals = [json.dumps(v) if isinstance(v, (dict, list)) else v for k, v in upd.items() if k in ("title", "difficulty", "tags", "compile_flags", "timeout_seconds", "scoring")]
+            if sets:
+                await conn.execute(f"UPDATE problems SET {sets} WHERE slug=?", vals + [slug])
+                await conn.commit()
+        return updated
     except FileNotFoundError:
         raise HTTPException(404, f"Problem '{problem_id}' not found")
 
@@ -149,16 +188,25 @@ async def update_problem_api(problem_id: str, req: UpdateProblemRequest):
 @router.delete("/problems/{problem_id}")
 async def delete_problem_api(problem_id: str):
     """删除题目"""
+    slug = problem_id
+    p = await db.get_problem_by_uuid(problem_id)
+    if p:
+        slug = p["slug"]
     # 检查是否有 submissions 引用
     conn = await db.get_db()
+    check_id = p["uuid"] if p else problem_id
     async with conn.execute(
-        "SELECT COUNT(*) as cnt FROM submissions WHERE problem_id=?", (problem_id,)
+        "SELECT COUNT(*) as cnt FROM submissions WHERE problem_id=?", (check_id,)
     ) as cur:
         row = await cur.fetchone()
         if row and row["cnt"] > 0:
             raise HTTPException(400, f"该题目有 {row['cnt']} 条提交记录，无法删除")
     try:
-        delete_problem(problem_id)
+        delete_problem(slug)
+        # 从数据库也删除
+        if p:
+            await conn.execute("DELETE FROM problems WHERE uuid=?", (p["uuid"],))
+            await conn.commit()
         return {"status": "deleted"}
     except FileNotFoundError:
         raise HTTPException(404, f"Problem '{problem_id}' not found")
@@ -167,8 +215,12 @@ async def delete_problem_api(problem_id: str):
 @router.post("/problems/{problem_id}/test-file")
 async def upload_test_file(problem_id: str, req: UpdateTestFileRequest):
     """上传/更新测试文件"""
+    slug = problem_id
+    p = await db.get_problem_by_uuid(problem_id)
+    if p:
+        slug = p["slug"]
     try:
-        update_test_file(problem_id, req.test_c)
+        update_test_file(slug, req.test_c)
         return {"status": "updated"}
     except FileNotFoundError:
         raise HTTPException(404, f"Problem '{problem_id}' not found")
