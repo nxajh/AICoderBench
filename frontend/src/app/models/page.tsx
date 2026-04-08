@@ -148,10 +148,10 @@ export default function ModelsPage() {
     }
   };
 
-  const handleDelete = async (uuid: string) => {
-    if (!confirm(`确定删除模型 "${uuid}"？`)) return;
+  const handleDelete = async (m: ModelConfig) => {
+    if (!confirm(`确定删除模型 "${m.provider} / ${m.model}"？`)) return;
     try {
-      const res = await fetch(`/api/model-configs/${uuid}`, { method: "DELETE" });
+      const res = await fetch(`/api/model-configs/${m.uuid}`, { method: "DELETE" });
       if (!res.ok) throw new Error("删除失败");
       await load();
     } catch (e) {
@@ -271,7 +271,7 @@ export default function ModelsPage() {
                   className="px-3 py-1 rounded text-xs bg-gray-700 hover:bg-gray-600 text-gray-300">
                   编辑
                 </button>
-                <button onClick={() => handleDelete(m.uuid)}
+                <button onClick={() => handleDelete(m)}
                   className="px-3 py-1 rounded text-xs bg-red-500/10 text-red-400 hover:bg-red-500/20">
                   删除
                 </button>

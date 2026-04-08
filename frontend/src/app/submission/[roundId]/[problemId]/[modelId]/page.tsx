@@ -179,12 +179,12 @@ export default function SubmissionPage() {
         <div className="mb-8">
           <div className="flex items-center gap-1 mb-2">
             <span className="text-2xl font-bold bg-gradient-to-r from-cyan-400 to-blue-500 bg-clip-text text-transparent">
-              {sub.model_name || modelUuid.slice(0, 8)}
+              {sub.model_name || "未知模型"}
             </span>
             <ModelBadge model="" provider={sub.model_provider || ""} thinking={sub.model_thinking} />
           </div>
           <p className="text-gray-400">
-            {problemMap[sub.problem_id]?.title || sub.problem_id.slice(0, 8)} · {sub.status}
+            {problemMap[sub.problem_id]?.title || "未知题目"} · {sub.status}
           </p>
         </div>
 

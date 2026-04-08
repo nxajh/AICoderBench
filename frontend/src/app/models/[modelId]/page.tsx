@@ -112,7 +112,7 @@ export default function ModelDetailPage() {
                     <tr key={p.problem_id}
                       className={`border-b border-gray-800/50 hover:bg-gray-800/50 cursor-pointer transition-colors ${expandedProblem === p.problem_id ? "bg-gray-800/30" : ""}`}
                       onClick={() => setExpandedProblem(expandedProblem === p.problem_id ? null : p.problem_id)}>
-                      <td className="px-4 py-3 font-medium">{problemMap[p.problem_id]?.title || p.problem_id.slice(0, 8)}</td>
+                      <td className="px-4 py-3 font-medium">{p.title || problemMap[p.problem_id]?.title || "未知题目"}</td>
                       <td className="px-4 py-3">
                         <span className={`font-mono ${p.best_score >= 80 ? "text-green-400" : p.best_score >= 50 ? "text-yellow-400" : "text-red-400"}`}>
                           {p.best_score}
