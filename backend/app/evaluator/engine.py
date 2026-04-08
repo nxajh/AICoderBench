@@ -90,40 +90,43 @@ def compute_scores(result: EvalResult, scoring: dict, token_usage: dict = None,
     if result.tests_total > 0:
         result.score_tests = int(tests_weight * result.tests_passed / result.tests_total)
 
-    # 安全性：ASan issues × 3 + TSan issues × 5（始终检测）
+    # 安全性：
+    #   ASan/UBSan — 适用于所有题目，每个 issue 扣 3 分
+    #   TSan      — 仅适用于并发题（concurrent=True），每个 issue 扣 5 分
     safety_weight = weights.get("safety", 25)
     safety_deduction = 0
     if result.compile_asan_success:
         safety_deduction += result.asan_issues * 3
-    if result.compile_tsan_success:
+    if concurrent and result.compile_tsan_success:
         safety_deduction += result.tsan_issues * 5
     result.score_safety = max(0, safety_weight - safety_deduction)
 
-    # 代码质量（按档位扣分，不是线性）
+    # 代码质量（圈复杂度按档位扣分 + cppcheck 静态分析）
     qual_weight = weights.get("quality", 15)
     max_cyclo = result.max_cyclomatic
-    if max_cyclo <= 20:
+    if max_cyclo <= 10:
         quality_score = qual_weight
-    elif max_cyclo <= 30:
+    elif max_cyclo <= 15:
         quality_score = int(qual_weight * 0.9)
+    elif max_cyclo <= 20:
+        quality_score = int(qual_weight * 0.75)
+    elif max_cyclo <= 30:
+        quality_score = int(qual_weight * 0.55)
     elif max_cyclo <= 40:
-        quality_score = int(qual_weight * 0.7)
+        quality_score = int(qual_weight * 0.30)
     elif max_cyclo <= 50:
-        quality_score = int(qual_weight * 0.5)
-    elif max_cyclo <= 60:
-        quality_score = int(qual_weight * 0.3)
+        quality_score = int(qual_weight * 0.10)
     else:
-        quality_score = int(qual_weight * 0.15)
+        quality_score = 0
     quality_penalty = result.cppcheck_errors * 3 + result.cppcheck_warnings
     result.score_quality = max(0, quality_score - quality_penalty)
 
-    # 资源管理：从 ASan 输出检测内存泄漏，leak issues × 3 扣分
+    # 资源管理：从 ASan 输出统计实际泄漏块数量（直接 + 间接），每块扣 3 分
     resource_weight = weights.get("resource", 15)
     if result.compile_asan_success and result.asan_output:
-        leak_count = result.asan_output.count("directly lost") + result.asan_output.count("indirectly lost")
-        # Also detect leak via keyword
-        if "ERROR: LeakSanitizer" in result.asan_output:
-            leak_count = max(leak_count, result.asan_output.count("LeakSanitizer"))
+        direct_leaks = len(re.findall(r'Direct leak', result.asan_output))
+        indirect_leaks = len(re.findall(r'Indirect leak', result.asan_output))
+        leak_count = direct_leaks + indirect_leaks
         result.score_resource = max(0, resource_weight - leak_count * 3)
     else:
         # 没有 ASan 输出则给满分
