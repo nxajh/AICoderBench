@@ -8,7 +8,6 @@ import { fetchAPI, putAPI, postAPI } from "@/lib/api";
 const SCORING_KEYS = ["compile", "tests", "concurrency", "memory", "quality", "performance", "efficiency"] as const;
 
 interface ProblemDetail {
-  id: string;
   title: string;
   difficulty: string;
   language: string;

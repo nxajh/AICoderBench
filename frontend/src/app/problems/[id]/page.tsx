@@ -7,7 +7,6 @@ import Nav from "@/components/nav";
 import { fetchAPI, deleteAPI } from "@/lib/api";
 
 interface ProblemDetail {
-  id: string;
   title: string;
   difficulty: string;
   language: string;

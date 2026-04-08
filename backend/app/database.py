@@ -453,8 +453,8 @@ async def get_model_stats(model_uuid: str) -> Optional[dict]:
     async with db.execute("SELECT uuid, provider, model, thinking FROM models WHERE uuid=?", (model_uuid,)) as cur:
         info = dict(await cur.fetchone())
 
-    async with db.execute("SELECT id, title FROM problems") as cur:
-        title_map = {r["id"]: r["title"] async for r in cur}
+    async with db.execute("SELECT uuid, title FROM problems") as cur:
+        title_map = {r["uuid"]: r["title"] async for r in cur}
 
     # 单次查询获取所有题目的分数统计
     async with db.execute("""

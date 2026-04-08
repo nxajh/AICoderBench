@@ -45,7 +45,6 @@ export async function deleteAPI<T = unknown>(path: string): Promise<T> {
 export interface Problem {
   uuid: string;
   slug: string;
-  id: string;
   title: string;
   difficulty: string;
   language: string;
