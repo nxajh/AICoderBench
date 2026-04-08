@@ -443,28 +443,24 @@ async def run_agent(
             # 分离思考内容和输出
             thinking_content = ""
             output_content = text_content or ""
-            # 如果有 reasoning_content（GLM thinking 等模型），直接用
-            if reasoning_content:
-                thinking_content = reasoning_content
-                # output_content 保持为 text_content
-            # 尝试多种分隔格式
-            if "</think" in output_content:
-                idx = output_content.find("</think")
-                end_pos = output_content.find(">", idx)
-                if end_pos >= 0:
-                    thinking_content = output_content[:idx].strip()
-                    output_content = output_content[end_pos+1:].strip()
-                else:
-                    thinking_content = output_content[:idx].strip()
-                    output_content = ""
-            elif u"\u200b" in output_content[:5]:
-                thinking_content = output_content
-                output_content = ""
-            elif output_content.count("\n") > 3 and "\n\n\n" in output_content:
-                parts = output_content.split("\n\n\n", 1)
-                thinking_content = parts[0].strip()
-                output_content = parts[1].strip()
-            # 无明显分隔，全部当输出
+
+            if provider.thinking:
+                # 思考模型：尝试提取思考内容
+                if reasoning_content:
+                    thinking_content = reasoning_content
+                elif "</think" in output_content:
+                    idx = output_content.find("</think")
+                    end_pos = output_content.find(">", idx)
+                    if end_pos >= 0:
+                        thinking_content = output_content[:idx].strip()
+                        output_content = output_content[end_pos+1:].strip()
+                    else:
+                        thinking_content = output_content[:idx].strip()
+                        output_content = ""
+            else:
+                # 非思考模型：只有 API 明确返回 reasoning_content 才算
+                if reasoning_content:
+                    thinking_content = reasoning_content
 
             thinking_content = _clean_thinking(thinking_content)
             round_record = {
