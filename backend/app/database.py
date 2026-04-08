@@ -262,8 +262,8 @@ async def create_submission(round_id: str, problem_id: str, model_uuid: str) -> 
     if row:
         return row[0]
     cur = await db.execute(
-        "INSERT INTO submissions (round_id, problem_id, model_uuid, model_id, status, created_at) VALUES (?, ?, ?, ?, 'pending', ?)",
-        (round_id, problem_id, model_uuid, model_uuid, now)
+        "INSERT INTO submissions (round_id, problem_id, model_uuid, status, created_at) VALUES (?, ?, ?, 'pending', ?)",
+        (round_id, problem_id, model_uuid, now)
     )
     await db.commit()
     return cur.lastrowid
