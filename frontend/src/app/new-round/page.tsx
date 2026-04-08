@@ -298,12 +298,12 @@ export default function NewRoundPage() {
                   <div className="flex items-center gap-3">
                     <span className="text-lg">{statusIcon(s.status)}</span>
                     <div>
-                      <span className="text-sm font-medium">{problemMap[s.problem_id]?.title || s.problem_id.slice(0, 8)}</span>
+                      <span className="text-sm font-medium">{problemMap[s.problem_id]?.title || "未知题目"}</span>
                       <span className="text-xs text-gray-500 mx-2">·</span>
                       <span className="text-xs text-gray-400">
                         {(() => {
                           const m = modelMap.get(s.model_uuid);
-                          return m ? <ModelBadge model={m.api_model} provider={m.provider} thinking={m.thinking} /> : s.model_uuid.slice(0, 8);
+                          return m ? <ModelBadge model={m.api_model} provider={m.provider} thinking={m.thinking} /> : <span className="text-gray-500">未知模型</span>;
                         })()}
                       </span>
                     </div>

@@ -35,7 +35,7 @@ export default function ProblemsPage() {
     if (!confirm(`确定删除题目 "${title}"？此操作不可恢复。`)) return;
     try {
       await deleteAPI(`/api/problems/${id}`);
-      setProblems(problems.filter(p => p.id !== id));
+      setProblems(problems.filter(p => p.uuid !== id));
     } catch (e) {
       alert(`删除失败: ${e instanceof Error ? e.message : e}`);
     }
@@ -63,19 +63,19 @@ export default function ProblemsPage() {
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
           {problems.map((p) => (
             <div
-              key={p.id}
+              key={p.uuid}
               className="block bg-gray-900 border border-gray-800 rounded-xl p-6 hover:border-cyan-800 transition-colors"
             >
               <div className="flex items-center gap-3 mb-3">
-                <Link href={`/problems/${p.id}`} className="font-semibold text-lg hover:text-cyan-400 transition-colors flex-1 min-w-0 truncate">
+                <Link href={`/problems/${p.uuid}`} className="font-semibold text-lg hover:text-cyan-400 transition-colors flex-1 min-w-0 truncate">
                   {p.title}
                 </Link>
                 <span className={`text-xs px-2 py-0.5 rounded ${difficultyColors[p.difficulty] || "bg-gray-700 text-gray-300"}`}>
                   {p.difficulty}
                 </span>
               </div>
-              <Link href={`/problems/${p.id}`}>
-                <p className="text-gray-400 text-sm mb-4 line-clamp-3">{p.description || p.id}</p>
+              <Link href={`/problems/${p.uuid}`}>
+                <p className="text-gray-400 text-sm mb-4 line-clamp-3">{p.description || p.slug}</p>
               </Link>
               <div className="flex flex-wrap gap-2 mb-4">
                 {p.tags?.map((tag) => (
@@ -91,13 +91,13 @@ export default function ProblemsPage() {
               </div>
               <div className="flex items-center gap-2 pt-3 border-t border-gray-800">
                 <Link
-                  href={`/problems/${p.id}/edit`}
+                  href={`/problems/${p.uuid}/edit`}
                   className="px-3 py-1 rounded text-xs bg-gray-700 hover:bg-gray-600 text-gray-300"
                 >
                   编辑
                 </Link>
                 <button
-                  onClick={() => handleDelete(p.id, p.title)}
+                  onClick={() => handleDelete(p.uuid, p.title)}
                   className="px-3 py-1 rounded text-xs bg-red-500/10 text-red-400 hover:bg-red-500/20"
                 >
                   删除

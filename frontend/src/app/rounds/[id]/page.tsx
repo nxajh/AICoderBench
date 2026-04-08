@@ -105,7 +105,7 @@ export default function RoundDetailPage({ params }: { params: { id: string } }) 
           {round.problem_ids.map((pid) => (
             <button key={pid} onClick={() => setFilterProblem(pid)}
               className={`px-3 py-1 rounded text-sm ${filterProblem === pid ? "bg-cyan-600 text-white" : "bg-gray-800 text-gray-400 hover:bg-gray-700"}`}>
-              {problemMap[pid]?.title || pid.slice(0, 8)}
+              {problemMap[pid]?.title || "未知题目"}
             </button>
           ))}
         </div>
@@ -129,7 +129,7 @@ export default function RoundDetailPage({ params }: { params: { id: string } }) 
                   return (
                     <tr key={muuid} className="border-b border-gray-800/50 hover:bg-gray-800/30">
                       <td className="px-6 py-3">
-                        <ModelBadge model={entry ? entry.model : muuid.slice(0, 8)} provider={entry?.provider || ""} thinking={entry?.thinking} />
+                        <ModelBadge model={entry ? entry.model : "未知模型"} provider={entry?.provider || ""} thinking={entry?.thinking} />
                       </td>
                       {round.problem_ids.map((pid) => {
                         const score = scoreMap[muuid]?.[pid] ?? -1;
@@ -159,8 +159,8 @@ export default function RoundDetailPage({ params }: { params: { id: string } }) 
               return (
                 <div key={s.id} className="bg-gray-900 border border-gray-800 rounded-lg p-4 flex items-center justify-between">
                   <div>
-                    <ModelBadge model={entry ? entry.model : s.model_uuid.slice(0, 8)} provider={entry?.provider || ""} thinking={entry?.thinking} />
-                    <span className="text-gray-500 text-sm ml-3">{problemMap[s.problem_id]?.title || s.problem_id.slice(0, 8)}</span>
+                    <ModelBadge model={entry ? entry.model : "未知模型"} provider={entry?.provider || ""} thinking={entry?.thinking} />
+                    <span className="text-gray-500 text-sm ml-3">{problemMap[s.problem_id]?.title || "未知题目"}</span>
                   </div>
                   <div className="flex items-center gap-4">
                     <span className={`font-mono ${s.total_score >= 80 ? "text-green-400" : s.total_score > 0 ? "text-gray-300" : "text-red-400"}`}>

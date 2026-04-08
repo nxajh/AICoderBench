@@ -453,8 +453,8 @@ async def get_model_stats(model_uuid: str) -> Optional[dict]:
     async with db.execute("SELECT uuid, provider, model, thinking FROM models WHERE uuid=?", (model_uuid,)) as cur:
         info = dict(await cur.fetchone())
 
-    async with db.execute("SELECT id, title FROM problems") as cur:
-        title_map = {r["id"]: r["title"] async for r in cur}
+    async with db.execute("SELECT uuid, title FROM problems") as cur:
+        title_map = {r["uuid"]: r["title"] async for r in cur}
 
     # 单次查询获取所有题目的分数统计
     async with db.execute("""
@@ -696,6 +696,7 @@ async def list_model_configs() -> list[dict]:
             d["api_key_masked"] = _mask_key(d.get("api_key", ""))
             d.pop("api_key", None)
             d.pop("name", None)
+            d.pop("provider_type", None)
             d["enabled"] = bool(d.get("enabled", 1))
             d["thinking"] = bool(d.get("thinking", 0))
             result.append(d)
