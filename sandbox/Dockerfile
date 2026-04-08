@@ -1,8 +1,7 @@
 FROM ubuntu:24.04
 
 RUN apt-get update && apt-get install -y \
-    gcc g++ clang \
-    cppcheck \
+    gcc g++ clang clang-tidy \
     python3 python3-pip \
     valgrind \
     wget \

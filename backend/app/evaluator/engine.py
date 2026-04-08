@@ -41,14 +41,27 @@ class EvalResult:
     asan_issues: int = 0
     asan_output: str = ""
 
-    # 静态分析
+    # 静态分析（clang-tidy）
+    clang_tidy_errors: int = 0
+    clang_tidy_warnings: int = 0
+    # 兼容旧数据（cppcheck 已停用，始终为 0）
     cppcheck_errors: int = 0
     cppcheck_warnings: int = 0
     cppcheck_output: str = ""
+    # 危险 C API 调用数（gets/strcpy/strcat/sprintf/system）
+    dangerous_apis: int = 0
+    # 圈复杂度
     max_cyclomatic: int = 0
     avg_cyclomatic: float = 0.0
+    # 函数最大行数（lizard）
+    max_func_length: int = 0
+    # 代码规模与注释
     total_loc: int = 0
     comment_ratio: float = 0.0
+    # Valgrind 精确泄漏块数（直接 + 间接）
+    valgrind_leaks: int = 0
+    # Helgrind 线程问题数（仅并发题）
+    helgrind_issues: int = 0
 
     # 评分
     score_compile: int = 0
@@ -91,17 +104,27 @@ def compute_scores(result: EvalResult, scoring: dict, token_usage: dict = None,
         result.score_tests = int(tests_weight * result.tests_passed / result.tests_total)
 
     # 安全性：
-    #   ASan/UBSan — 适用于所有题目，每个 issue 扣 3 分
-    #   TSan      — 仅适用于并发题（concurrent=True），每个 issue 扣 5 分
+    #   ASan/UBSan     — 所有题目，每 issue 扣 3 分
+    #   TSan           — 仅并发题，每 issue 扣 5 分
+    #   Helgrind       — 仅并发题，每 issue 扣 2 分（对 TSan 的补充）
+    #   危险 API 调用  — 所有题目，每处扣 3 分
     safety_weight = weights.get("safety", 25)
     safety_deduction = 0
     if result.compile_asan_success:
         safety_deduction += result.asan_issues * 3
     if concurrent and result.compile_tsan_success:
         safety_deduction += result.tsan_issues * 5
+    if concurrent:
+        safety_deduction += result.helgrind_issues * 2
+    safety_deduction += result.dangerous_apis * 3
     result.score_safety = max(0, safety_weight - safety_deduction)
 
-    # 代码质量（圈复杂度按档位扣分 + cppcheck 静态分析）
+    # 代码质量：
+    #   圈复杂度（max）按档位打底分
+    #   圈复杂度（avg）超过 8 额外扣分
+    #   clang-tidy 静态分析问题
+    #   函数最大行数（> 80 行）扣分
+    #   注释率（< 5%）扣分
     qual_weight = weights.get("quality", 15)
     max_cyclo = result.max_cyclomatic
     if max_cyclo <= 10:
@@ -118,18 +141,41 @@ def compute_scores(result: EvalResult, scoring: dict, token_usage: dict = None,
         quality_score = int(qual_weight * 0.10)
     else:
         quality_score = 0
-    quality_penalty = result.cppcheck_errors * 3 + result.cppcheck_warnings
+
+    quality_penalty = result.clang_tidy_errors * 3 + result.clang_tidy_warnings
+
+    # avg 圈复杂度超过 8 扣分（每超出 1 扣 0.5，最多扣 3 分）
+    if result.avg_cyclomatic > 8:
+        quality_penalty += min(3, int((result.avg_cyclomatic - 8) * 0.5))
+
+    # 函数过长（> 80 行扣 1，> 120 行扣 2，> 200 行扣 3）
+    if result.max_func_length > 200:
+        quality_penalty += 3
+    elif result.max_func_length > 120:
+        quality_penalty += 2
+    elif result.max_func_length > 80:
+        quality_penalty += 1
+
+    # 注释不足（LOC > 30 且注释率 < 5%，扣 2 分）
+    if result.total_loc > 30 and result.comment_ratio < 0.05:
+        quality_penalty += 2
+
     result.score_quality = max(0, quality_score - quality_penalty)
 
-    # 资源管理：从 ASan 输出统计实际泄漏块数量（直接 + 间接），每块扣 3 分
+    # 资源管理：
+    #   优先使用 Valgrind memcheck（更精确），否则回退到 ASan 泄漏计数
     resource_weight = weights.get("resource", 15)
-    if result.compile_asan_success and result.asan_output:
+    if result.valgrind_leaks > 0:
+        # valgrind 已运行且检测到泄漏
+        result.score_resource = max(0, resource_weight - result.valgrind_leaks * 3)
+    elif result.compile_asan_success and result.asan_output:
+        # 回退：从 ASan 输出统计直接/间接泄漏块（各自一行 "Direct/Indirect leak"）
         direct_leaks = len(re.findall(r'Direct leak', result.asan_output))
         indirect_leaks = len(re.findall(r'Indirect leak', result.asan_output))
         leak_count = direct_leaks + indirect_leaks
         result.score_resource = max(0, resource_weight - leak_count * 3)
     else:
-        # 没有 ASan 输出则给满分
+        # 无泄漏检测数据则给满分
         result.score_resource = resource_weight
 
     # 性能：与 perf_baseline_ms 对比
@@ -160,7 +206,7 @@ def compute_scores(result: EvalResult, scoring: dict, token_usage: dict = None,
 async def run_eval_in_sandbox(
     code_files: dict[str, str],  # {filename: content}
     problem_dir: Path,           # 题目目录（含 test.c 等）
-    timeout: int = 120,
+    timeout: int = 300,
     memory: str = "128m",
 ) -> EvalResult:
     """
@@ -208,6 +254,7 @@ async def run_eval_in_sandbox(
                 "solution.c",
                 "",
                 extra_flags,
+                "1" if concurrent else "0",
             ]
 
             logger.info(f"Running evaluation: {' '.join(cmd[:3])} ...")

@@ -19,7 +19,7 @@ DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{DATA_DIR / 'aicoderbench.d
 DOCKER_IMAGE = "aicoderbench-eval"
 DOCKER_MEMORY = "128m"
 DOCKER_CPUS = 1
-DOCKER_TIMEOUT = 120  # 秒
+DOCKER_TIMEOUT = 300  # 秒（含 valgrind memcheck + helgrind）
 SANDBOX_CONCURRENCY = int(os.getenv("SANDBOX_CONCURRENCY", "1"))
 
 # 模型调用
