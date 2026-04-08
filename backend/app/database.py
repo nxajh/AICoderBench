@@ -111,6 +111,15 @@ async def init_db():
     if "model_uuid" not in columns:
         await db.execute("ALTER TABLE submissions ADD COLUMN model_uuid TEXT DEFAULT ''")
 
+    # 迁移：rounds 表 model_ids → model_uuids
+    cursor = await db.execute("PRAGMA table_info(rounds)")
+    round_columns = [row[1] for row in await cursor.fetchall()]
+    if "model_ids" in round_columns and "model_uuids" not in round_columns:
+        await db.execute("ALTER TABLE rounds RENAME COLUMN model_ids TO model_uuids")
+
+    # 迁移：submissions model_uuid 为空时用 model_id 填充
+    await db.execute("UPDATE submissions SET model_uuid = model_id WHERE model_uuid = '' AND model_id != ''")
+
     # 迁移：扩展 models 表
     cursor = await db.execute("PRAGMA table_info(models)")
     model_columns = [row[1] for row in await cursor.fetchall()]
