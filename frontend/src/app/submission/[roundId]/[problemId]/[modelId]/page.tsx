@@ -129,7 +129,7 @@ function GenerationProcess({ history }: { history: GenerationRound[] }) {
               {round.tool_calls && round.tool_calls.length > 0 && (
                 <div className="flex flex-wrap gap-1.5">
                   {round.tool_calls.map((tc, i) => (
-                    <ToolBadge key={i} tc={tc as Record<string, unknown>} />
+                    <ToolBadge key={i} tc={tc as unknown as Record<string, unknown>} />
                   ))}
                 </div>
               )}

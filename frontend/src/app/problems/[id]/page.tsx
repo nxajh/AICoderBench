@@ -28,6 +28,7 @@ interface ProblemLeaderboardEntry {
   total_tokens: number;
   duration: number;
   rounds: number;
+  best_round_id?: string;
 }
 
 export default function ProblemDetailPage() {
@@ -128,9 +129,9 @@ export default function ProblemDetailPage() {
                 </thead>
                 <tbody>
                   {leaderboard.map((entry, idx) => {
-                    const canNavigate = !!(entry as Record<string, unknown>).best_round_id;
+                    const canNavigate = !!entry.best_round_id;
                     const handleClick = canNavigate
-                      ? () => router.push(`/submission/${(entry as Record<string, unknown>).best_round_id}/${id}/${entry.model_uuid}`)
+                      ? () => router.push(`/submission/${entry.best_round_id}/${id}/${entry.model_uuid}`)
                       : undefined;
                     return (
                       <tr
