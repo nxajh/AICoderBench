@@ -3,7 +3,7 @@
 import { useEffect, useState, useMemo } from "react";
 import { useParams } from "next/navigation";
 import Nav from "@/components/nav";
-import { fetchAPI, ModelStats } from "@/lib/api";
+import { fetchAPI, ModelStats, Problem } from "@/lib/api";
 import Link from "next/link";
 
 type SortKey = "problem_id" | "title" | "best_score" | "worst_score" | "avg_score" | "submission_count";
@@ -18,6 +18,17 @@ export default function ModelDetailPage() {
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [expandedProblem, setExpandedProblem] = useState<string | null>(null);
   const [submissions, setSubmissions] = useState<any[]>([]);
+  const [problemMap, setProblemMap] = useState<Record<string, Problem>>({});
+
+  useEffect(() => {
+    fetchAPI<Problem[]>("/api/problems")
+      .then((list) => {
+        const m: Record<string, Problem> = {};
+        list.forEach((p) => { m[p.uuid] = p; });
+        setProblemMap(m);
+      })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     if (!modelUuid) return;
@@ -100,7 +111,7 @@ export default function ModelDetailPage() {
                     <tr key={p.problem_id}
                       className={`border-b border-gray-800/50 hover:bg-gray-800/50 cursor-pointer transition-colors ${expandedProblem === p.problem_id ? "bg-gray-800/30" : ""}`}
                       onClick={() => setExpandedProblem(expandedProblem === p.problem_id ? null : p.problem_id)}>
-                      <td className="px-4 py-3 font-medium">{p.problem_id}</td>
+                      <td className="px-4 py-3 font-medium">{problemMap[p.problem_id]?.title || p.problem_id.slice(0, 8)}</td>
                       <td className="px-4 py-3">
                         <span className={`font-mono ${p.best_score >= 80 ? "text-green-400" : p.best_score >= 50 ? "text-yellow-400" : "text-red-400"}`}>
                           {p.best_score}

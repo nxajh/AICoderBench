@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Nav from "@/components/nav";
 import ModelBadge from "@/components/model-badge";
-import { fetchAPI, Submission, GenerationRound } from "@/lib/api";
+import { fetchAPI, Submission, GenerationRound, Problem } from "@/lib/api";
 
 function Bar({ label, value, max }: { label: string; value: number; max: number }) {
   const pct = max > 0 ? (value / max) * 100 : 0;
@@ -148,6 +148,17 @@ export default function SubmissionPage() {
   const modelUuid = (params.modelId as string) || "";
   const [sub, setSub] = useState<Submission | null>(null);
   const [loading, setLoading] = useState(true);
+  const [problemMap, setProblemMap] = useState<Record<string, Problem>>({});
+
+  useEffect(() => {
+    fetchAPI<Problem[]>("/api/problems")
+      .then((list) => {
+        const m: Record<string, Problem> = {};
+        list.forEach((p) => { m[p.uuid] = p; });
+        setProblemMap(m);
+      })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     fetchAPI<Submission>(`/api/submissions/${roundId}/${problemId}/${modelUuid}`)
@@ -173,7 +184,7 @@ export default function SubmissionPage() {
             <ModelBadge model="" provider={sub.model_provider || ""} thinking={sub.model_thinking} />
           </div>
           <p className="text-gray-400">
-            {sub.problem_id} · {sub.status}
+            {problemMap[sub.problem_id]?.title || sub.problem_id.slice(0, 8)} · {sub.status}
           </p>
         </div>
 

@@ -22,6 +22,7 @@ export default function NewRoundPage() {
   const [problems, setProblems] = useState<Problem[]>([]);
   const [models, setModels] = useState<ModelSelectItem[]>([]);
   const [selectedProblems, setSelectedProblems] = useState<Set<string>>(new Set());
+  const problemMap = Object.fromEntries(problems.map((p) => [p.uuid, p]));
   const [selectedModels, setSelectedModels] = useState<Set<string>>(new Set());
   const [roundName, setRoundName] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -55,7 +56,7 @@ export default function NewRoundPage() {
     if (selectedProblems.size === problems.length) {
       setSelectedProblems(new Set());
     } else {
-      setSelectedProblems(new Set(problems.map(p => p.id)));
+      setSelectedProblems(new Set(problems.map(p => p.uuid)));
     }
   };
 
@@ -201,16 +202,16 @@ export default function NewRoundPage() {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 {problems.map(p => (
                   <button
-                    key={p.id}
-                    onClick={() => toggleProblem(p.id)}
+                    key={p.uuid}
+                    onClick={() => toggleProblem(p.uuid)}
                     className={`rounded-lg border px-4 py-3 text-left transition-all ${
-                      selectedProblems.has(p.id)
+                      selectedProblems.has(p.uuid)
                         ? "border-cyan-500 bg-cyan-500/10 text-cyan-400"
                         : "border-gray-700 bg-gray-900 text-gray-300 hover:border-gray-500"
                     }`}
                   >
-                    <div className="font-medium text-sm">{p.id}</div>
-                    <div className="text-xs text-gray-500 mt-1">{p.title} · {p.difficulty}</div>
+                    <div className="font-medium text-sm">{p.title}</div>
+                    <div className="text-xs text-gray-500 mt-1">{p.difficulty} · {p.tags?.join(', ')}</div>
                   </button>
                 ))}
               </div>
@@ -293,7 +294,7 @@ export default function NewRoundPage() {
                   <div className="flex items-center gap-3">
                     <span className="text-lg">{statusIcon(s.status)}</span>
                     <div>
-                      <span className="text-sm font-medium">{s.problem_id}</span>
+                      <span className="text-sm font-medium">{problemMap[s.problem_id]?.title || s.problem_id.slice(0, 8)}</span>
                       <span className="text-xs text-gray-500 mx-2">·</span>
                       <span className="text-xs text-gray-400">
                         {(() => {

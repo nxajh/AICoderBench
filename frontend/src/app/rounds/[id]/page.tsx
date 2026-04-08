@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Nav from "@/components/nav";
 import ModelBadge from "@/components/model-badge";
-import { fetchAPI, Submission, LeaderboardEntry, RoundInfo } from "@/lib/api";
+import { fetchAPI, Submission, LeaderboardEntry, RoundInfo, Problem } from "@/lib/api";
 import Link from "next/link";
 
 export default function RoundDetailPage({ params }: { params: { id: string } }) {
@@ -12,6 +12,17 @@ export default function RoundDetailPage({ params }: { params: { id: string } }) 
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [loading, setLoading] = useState(true);
   const [filterProblem, setFilterProblem] = useState<string>("all");
+  const [problemMap, setProblemMap] = useState<Record<string, Problem>>({});
+
+  useEffect(() => {
+    fetchAPI<Problem[]>("/api/problems")
+      .then((list) => {
+        const m: Record<string, Problem> = {};
+        list.forEach((p) => { m[p.uuid] = p; });
+        setProblemMap(m);
+      })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     fetchAPI<{ round: RoundInfo; leaderboard: LeaderboardEntry[]; submissions: Submission[] }>(
@@ -88,7 +99,7 @@ export default function RoundDetailPage({ params }: { params: { id: string } }) 
           {round.problem_ids.map((pid) => (
             <button key={pid} onClick={() => setFilterProblem(pid)}
               className={`px-3 py-1 rounded text-sm ${filterProblem === pid ? "bg-cyan-600 text-white" : "bg-gray-800 text-gray-400 hover:bg-gray-700"}`}>
-              {pid}
+              {problemMap[pid]?.title || pid.slice(0, 8)}
             </button>
           ))}
         </div>
@@ -102,7 +113,7 @@ export default function RoundDetailPage({ params }: { params: { id: string } }) 
                 <tr className="text-left text-gray-400 text-sm border-b border-gray-800">
                   <th className="px-6 py-3">模型 / 题目</th>
                   {round.problem_ids.map((pid) => (
-                    <th key={pid} className="px-6 py-3 text-center">{pid}</th>
+                    <th key={pid} className="px-6 py-3 text-center">{problemMap[pid]?.title || pid.slice(0, 8)}</th>
                   ))}
                 </tr>
               </thead>
@@ -143,7 +154,7 @@ export default function RoundDetailPage({ params }: { params: { id: string } }) 
                 <div key={s.id} className="bg-gray-900 border border-gray-800 rounded-lg p-4 flex items-center justify-between">
                   <div>
                     <ModelBadge model={entry ? entry.model : s.model_uuid.slice(0, 8)} provider={entry?.provider || ""} thinking={entry?.thinking} />
-                    <span className="text-gray-500 text-sm ml-3">{s.problem_id}</span>
+                    <span className="text-gray-500 text-sm ml-3">{problemMap[s.problem_id]?.title || s.problem_id.slice(0, 8)}</span>
                   </div>
                   <div className="flex items-center gap-4">
                     <span className={`font-mono ${s.total_score >= 80 ? "text-green-400" : s.total_score > 0 ? "text-gray-300" : "text-red-400"}`}>
