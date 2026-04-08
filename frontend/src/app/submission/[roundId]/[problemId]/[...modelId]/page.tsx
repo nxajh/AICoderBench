@@ -145,8 +145,8 @@ export default function SubmissionPage() {
   const params = useParams();
   const roundId = params.roundId as string;
   const problemId = params.problemId as string;
-  const encodedModelId = params.modelId as string;
-  const modelUuid = encodedModelId || "";
+  const modelIdParts = params.modelId as string[];
+  const modelUuid = modelIdParts ? modelIdParts.join("/") : "";
   const [sub, setSub] = useState<Submission | null>(null);
   const [loading, setLoading] = useState(true);
 
