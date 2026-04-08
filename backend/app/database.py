@@ -17,6 +17,9 @@ DB_PATH = DATABASE_URL.replace("sqlite:///", "")
 # 模块级共享连接
 _db: Optional[aiosqlite.Connection] = None
 
+# submissions 表是否仍含 model_id 列（旧 DB 迁移失败时为 True）
+_submissions_has_model_id: bool = False
+
 # 列名白名单
 VALID_SUBMISSION_COLUMNS = {
     "status", "generated_code", "raw_output", "used_tool_call",
@@ -127,10 +130,15 @@ async def init_db():
         await db.execute("ALTER TABLE rounds RENAME COLUMN model_ids TO model_uuids")
 
     # 迁移：submissions model_uuid 为空时用 model_id 填充（仅旧库有 model_id 列时执行）
+    global _submissions_has_model_id
     if "model_id" in columns:
         await db.execute("UPDATE submissions SET model_uuid = model_id WHERE model_uuid = '' AND model_id != ''")
-        # 删除 model_id 列以消除 NOT NULL 约束对新 INSERT 的影响（SQLite 3.35+）
-        await db.execute("ALTER TABLE submissions DROP COLUMN model_id")
+        try:
+            # 删除 model_id 列（SQLite 3.35+，且列未被 UNIQUE 约束引用时可用）
+            await db.execute("ALTER TABLE submissions DROP COLUMN model_id")
+        except Exception:
+            # 旧库中 model_id 在 UNIQUE 约束内无法 DROP，保留列并标记，INSERT 时补填
+            _submissions_has_model_id = True
 
     # 迁移：扩展 models 表
     cursor = await db.execute("PRAGMA table_info(models)")
@@ -261,10 +269,17 @@ async def create_submission(round_id: str, problem_id: str, model_uuid: str) -> 
     await cur.close()
     if row:
         return row[0]
-    cur = await db.execute(
-        "INSERT INTO submissions (round_id, problem_id, model_uuid, status, created_at) VALUES (?, ?, ?, 'pending', ?)",
-        (round_id, problem_id, model_uuid, now)
-    )
+    if _submissions_has_model_id:
+        # 旧库 model_id 列未能 DROP（在 UNIQUE 约束中），补填以满足 NOT NULL
+        cur = await db.execute(
+            "INSERT INTO submissions (round_id, problem_id, model_uuid, model_id, status, created_at) VALUES (?, ?, ?, ?, 'pending', ?)",
+            (round_id, problem_id, model_uuid, model_uuid, now)
+        )
+    else:
+        cur = await db.execute(
+            "INSERT INTO submissions (round_id, problem_id, model_uuid, status, created_at) VALUES (?, ?, ?, 'pending', ?)",
+            (round_id, problem_id, model_uuid, now)
+        )
     await db.commit()
     return cur.lastrowid
 
