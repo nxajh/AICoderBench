@@ -8,11 +8,12 @@ import Link from "next/link";
 export default function RoundsPage() {
   const [rounds, setRounds] = useState<RoundInfo[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     fetchAPI<RoundInfo[]>("/api/rounds")
       .then((data) => { setRounds(data); setLoading(false); })
-      .catch(() => setLoading(false));
+      .catch((e: Error) => { setError(e.message || "加载失败"); setLoading(false); });
   }, []);
 
   return (
@@ -23,6 +24,7 @@ export default function RoundsPage() {
           评测轮次
         </h1>
         {loading && <p className="text-gray-500">加载中...</p>}
+        {!loading && error && <p className="text-red-400 text-sm mb-4">加载失败：{error}</p>}
         <div className="grid gap-4">
           {rounds.map((r) => {
             const lb = r.leaderboard || [];

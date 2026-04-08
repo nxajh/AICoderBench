@@ -4,6 +4,7 @@
 """
 import json
 import os
+import re
 import shutil
 from pathlib import Path
 from pydantic import BaseModel
@@ -38,6 +39,9 @@ class Problem(BaseModel):
 
 def _find_problem_dir(problem_id: str) -> Path:
     """根据 id 或目录名查找题目目录"""
+    # 防止路径穿越：仅允许字母、数字、下划线、连字符
+    if not re.match(r'^[a-zA-Z0-9_-]+$', problem_id):
+        raise ValueError(f"Invalid problem ID: {problem_id!r}")
     # 先尝试直接匹配目录名
     d = PROBLEMS_DIR / problem_id
     if d.exists() and (d / "problem.json").exists():

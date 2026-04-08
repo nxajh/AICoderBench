@@ -322,17 +322,24 @@ async def create_round(req: CreateRoundRequest, background_tasks: BackgroundTask
     if not valid_models:
         raise HTTPException(400, "No models configured")
 
+    # 提前生成 round_id，以便立即返回给客户端用于追踪进度
+    import uuid as _uuid
+    round_id = f"round-{_uuid.uuid4().hex[:8]}"
+    await db.create_round(round_id, valid_problems, valid_models, req.name)
+    await db.update_round_status(round_id, "running")
+
     async def _run():
-        await run_benchmark(valid_problems, valid_models, providers, req.name)
+        await run_benchmark(valid_problems, valid_models, providers, req.name, round_id=round_id)
 
     background_tasks.add_task(_run)
 
     return {
         "status": "started",
+        "round_id": round_id,
         "problems": valid_problems,
         "models": valid_models,
         "total_tasks": len(valid_problems) * len(valid_models),
-        "message": "Round created. Use GET /api/rounds to track progress.",
+        "message": f"Round created. Use GET /api/rounds/{round_id} to track progress.",
     }
 
 

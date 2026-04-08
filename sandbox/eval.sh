@@ -7,6 +7,7 @@ HEADER_FILE="${3:-}"
 EXTRA_FLAGS="${4:-}"
 TEST_TIMEOUT="${TEST_TIMEOUT:-30}"
 TSAN_TEST_TIMEOUT="${TSAN_TEST_TIMEOUT:-60}"
+ASAN_TEST_TIMEOUT="${ASAN_TEST_TIMEOUT:-60}"
 
 # 确定测试文件
 if [ -f test.c ]; then
@@ -145,7 +146,7 @@ if [ "$COMPILE_TSAN_SUCCESS" = true ]; then
 fi
 
 if [ "$COMPILE_ASAN_SUCCESS" = true ]; then
-    ASAN_OUTPUT=$(timeout "$TSAN_TEST_TIMEOUT" ./solution_asan 2>&1) || true
+    ASAN_OUTPUT=$(timeout "$ASAN_TEST_TIMEOUT" ./solution_asan 2>&1) || true
     ASAN_ISSUES=$(echo "$ASAN_OUTPUT" | grep -cE 'AddressSanitizer|UndefinedBehaviorSanitizer' || true)
 fi
 

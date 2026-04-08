@@ -11,13 +11,14 @@ type SortDir = "asc" | "desc";
 export default function HomePage() {
   const [data, setData] = useState<GlobalLeaderboardEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [sortKey, setSortKey] = useState<SortKey>("total_score");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
 
   useEffect(() => {
     fetchAPI<GlobalLeaderboardEntry[]>("/api/global-leaderboard")
       .then((d) => { setData(d); setLoading(false); })
-      .catch(() => setLoading(false));
+      .catch((e: Error) => { setError(e.message || "加载失败"); setLoading(false); });
   }, []);
 
   const sorted = useMemo(() => {
@@ -57,6 +58,7 @@ export default function HomePage() {
         </div>
 
         {loading && <p className="text-center text-gray-500">加载中...</p>}
+        {!loading && error && <p className="text-center text-red-400">加载失败：{error}</p>}
 
         {!loading && sorted.length > 0 && (
           <section className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">

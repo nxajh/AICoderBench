@@ -187,14 +187,16 @@ async def run_eval_in_sandbox(
         (sandbox / "eval.sh").write_text(eval_script)
         os.chmod(sandbox / "eval.sh", 0o755)
 
-        # 读取 problem.json 获取编译参数
+        # 读取 problem.json 获取编译参数和并发标志
         extra_flags = ""
         scoring = {}
+        concurrent = True
         problem_json = problem_dir / "problem.json"
         if problem_json.exists():
             pdata = json.loads(problem_json.read_text())
             extra_flags = pdata.get("compile_flags", "")
             scoring = pdata.get("scoring", {})
+            concurrent = pdata.get("concurrent", True)
 
         try:
             cmd = [
@@ -262,11 +264,6 @@ async def run_eval_in_sandbox(
             result.error = str(e)
             logger.error(f"Evaluation error: {e}")
 
-    # 计算评分
-    concurrent = True
-    if problem_json.exists():
-        pdata = json.loads(problem_json.read_text())
-        concurrent = pdata.get("concurrent", True)
-
+    # 计算评分（concurrent 已在 with 块内读取）
     compute_scores(result, scoring, token_usage=None, concurrent=concurrent)
     return result

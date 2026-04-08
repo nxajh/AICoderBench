@@ -14,10 +14,10 @@ export default function ModelDetailPage() {
 
   const [stats, setStats] = useState<ModelStats | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [sortKey, setSortKey] = useState<SortKey>("best_score");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [expandedProblem, setExpandedProblem] = useState<string | null>(null);
-  const [submissions, setSubmissions] = useState<any[]>([]);
   const [problemMap, setProblemMap] = useState<Record<string, Problem>>({});
 
   useEffect(() => {
@@ -34,7 +34,7 @@ export default function ModelDetailPage() {
     if (!modelUuid) return;
     fetchAPI<ModelStats>(`/api/model-stats/${modelUuid}`)
       .then((d) => { setStats(d); setLoading(false); })
-      .catch(() => setLoading(false));
+      .catch((e: Error) => { setError(e.message || "加载失败"); setLoading(false); });
   }, [modelUuid]);
 
   const sorted = useMemo(() => {
@@ -56,6 +56,7 @@ export default function ModelDetailPage() {
   const arrow = (key: SortKey) => sortKey === key ? (sortDir === "asc" ? " ↑" : " ↓") : "";
 
   if (loading) return <><Nav /><div className="max-w-5xl mx-auto px-4 py-8 text-gray-400">加载中...</div></>;
+  if (error) return <><Nav /><div className="max-w-5xl mx-auto px-4 py-8 text-red-400">加载失败：{error}</div></>;
 
   return (
     <>

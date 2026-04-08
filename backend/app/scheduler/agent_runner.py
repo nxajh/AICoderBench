@@ -15,21 +15,9 @@ from typing import Optional
 from ..providers.model_provider import ModelProvider
 from ..evaluator.engine import run_eval_in_sandbox, compute_scores, EvalResult
 from ..models.problem import Problem, _find_problem_dir
+from ..utils import clean_thinking as _clean_thinking
 
 logger = logging.getLogger(__name__)
-
-
-def _clean_thinking(text: str) -> str:
-    """去除思考内容的标记标签"""
-    import re
-    text = text.lstrip()
-    text = re.sub(r'^[\u200b\u200c\u200d]*', '', text)
-    text = re.sub(r'^◀think▶\s*', '', text)
-    text = re.sub(r'^<think[^>]*>\s*', '', text)
-    text = re.sub(r'^\u200b\s*', '', text)
-    text = re.sub(r'\s*◀/think▶\s*$', '', text)
-    text = re.sub(r'\s*</think\s*>\s*$', '', text)
-    return text.strip()
 
 # 总超时 2 小时
 AGENT_TOTAL_TIMEOUT = 7200
@@ -439,6 +427,11 @@ async def run_agent(
             # 把 assistant 消息加入历史
             assistant_msg = resp["choices"][0]["message"]
             messages.append(assistant_msg)
+
+            # 滑动窗口：保留第一条（系统提示）+ 最近 MAX_CONTEXT_MESSAGES 条，防止超出上下文
+            MAX_CONTEXT_MESSAGES = 60
+            if len(messages) > MAX_CONTEXT_MESSAGES + 1:
+                messages = [messages[0]] + messages[-(MAX_CONTEXT_MESSAGES):]
 
             # 分离思考内容和输出
             thinking_content = ""

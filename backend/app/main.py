@@ -2,6 +2,7 @@
 AICoderBench — AI编码能力评测平台
 """
 import logging
+import os
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -28,12 +29,20 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# 允许的来源：可通过 CORS_ORIGINS 环境变量配置，默认允许本地开发地址
+_cors_origins_env = os.getenv("CORS_ORIGINS", "")
+_allowed_origins = (
+    [o.strip() for o in _cors_origins_env.split(",") if o.strip()]
+    if _cors_origins_env
+    else ["http://localhost:3000", "http://127.0.0.1:3000", "http://frontend:3000"]
+)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=_allowed_origins,
+    allow_credentials=False,  # allow_credentials=True 与 allow_origins=["*"] 组合在规范中无效
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 
 app.include_router(router, prefix="/api")
