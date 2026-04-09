@@ -137,39 +137,39 @@ def compute_scores(result: EvalResult, scoring: dict, token_usage: dict = None,
 
     # 代码质量：
     #   圈复杂度（max）按档位打底分
-    #   圈复杂度（avg）超过 8 额外扣分
+    #   圈复杂度（avg）超过 12 额外扣分
     #   clang-tidy 静态分析问题
-    #   函数最大行数（> 80 行）扣分
+    #   函数最大行数（> 100 行）扣分
     #   注释率（< 5%）扣分
     qual_weight = weights.get("quality", 15)
     max_cyclo = result.max_cyclomatic
-    if max_cyclo <= 10:
+    if max_cyclo <= 15:
         quality_score = qual_weight
-    elif max_cyclo <= 15:
+    elif max_cyclo <= 25:
         quality_score = int(qual_weight * 0.9)
-    elif max_cyclo <= 20:
-        quality_score = int(qual_weight * 0.75)
-    elif max_cyclo <= 30:
-        quality_score = int(qual_weight * 0.55)
     elif max_cyclo <= 40:
+        quality_score = int(qual_weight * 0.75)
+    elif max_cyclo <= 60:
+        quality_score = int(qual_weight * 0.55)
+    elif max_cyclo <= 80:
         quality_score = int(qual_weight * 0.30)
-    elif max_cyclo <= 50:
+    elif max_cyclo <= 100:
         quality_score = int(qual_weight * 0.10)
     else:
         quality_score = 0
 
     quality_penalty = result.clang_tidy_errors * 3 + result.clang_tidy_warnings
 
-    # avg 圈复杂度超过 8 扣分（每超出 1 扣 0.5，最多扣 3 分）
-    if result.avg_cyclomatic > 8:
-        quality_penalty += min(3, int((result.avg_cyclomatic - 8) * 0.5))
+    # avg 圈复杂度超过 12 扣分（每超出 1 扣 0.5，最多扣 3 分）
+    if result.avg_cyclomatic > 12:
+        quality_penalty += min(3, int((result.avg_cyclomatic - 12) * 0.5))
 
-    # 函数过长（> 80 行扣 1，> 120 行扣 2，> 200 行扣 3）
-    if result.max_func_length > 200:
+    # 函数过长（> 100 行扣 1，> 200 行扣 2，> 400 行扣 3）
+    if result.max_func_length > 400:
         quality_penalty += 3
-    elif result.max_func_length > 120:
+    elif result.max_func_length > 200:
         quality_penalty += 2
-    elif result.max_func_length > 80:
+    elif result.max_func_length > 100:
         quality_penalty += 1
 
     # 注释不足（LOC > 30 且注释率 < 5%，扣 2 分）
