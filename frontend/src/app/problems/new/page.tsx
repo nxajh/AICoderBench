@@ -15,7 +15,6 @@ export default function NewProblemPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [form, setForm] = useState({
-    id: "",
     title: "",
     difficulty: "medium",
     tags: "",
@@ -32,10 +31,6 @@ export default function NewProblemPage() {
     e.preventDefault();
     setError("");
 
-    if (!/^[a-zA-Z0-9_-]+$/.test(form.id)) {
-      setError("ID 只能包含字母、数字、下划线和连字符");
-      return;
-    }
     if (!form.title.trim()) {
       setError("标题不能为空");
       return;
@@ -43,8 +38,7 @@ export default function NewProblemPage() {
 
     setSaving(true);
     try {
-      await postAPI("/api/problems", {
-        id: form.id,
+      const created = await postAPI<{ slug?: string; id?: string }>("/api/problems", {
         title: form.title,
         difficulty: form.difficulty,
         tags: form.tags.split(",").map(t => t.trim()).filter(Boolean),
@@ -56,8 +50,9 @@ export default function NewProblemPage() {
         interface_h: form.interface_h,
       });
       // Upload test file if provided
-      if (form.test_c.trim()) {
-        await postAPI(`/api/problems/${form.id}/test-file`, { test_c: form.test_c });
+      const problemSlug = created.slug || created.id;
+      if (form.test_c.trim() && problemSlug) {
+        await postAPI(`/api/problems/${problemSlug}/test-file`, { test_c: form.test_c });
       }
       router.push("/problems");
     } catch (e) {
@@ -86,13 +81,7 @@ export default function NewProblemPage() {
           <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 space-y-4">
             <h2 className="text-lg font-semibold">基本信息</h2>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-xs text-gray-400 mb-1">题目 ID *</label>
-                <input value={form.id} onChange={e => setForm(f => ({ ...f, id: e.target.value }))}
-                  className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-sm" placeholder="如: 02-thread-pool" required />
-                <p className="text-xs text-gray-500 mt-1">字母、数字、下划线、连字符</p>
-              </div>
-              <div>
+              <div className="sm:col-span-2">
                 <label className="block text-xs text-gray-400 mb-1">标题 *</label>
                 <input value={form.title} onChange={e => setForm(f => ({ ...f, title: e.target.value }))}
                   className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-sm" placeholder="如: 线程池实现" required />
