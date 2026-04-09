@@ -23,7 +23,7 @@ VALID_SUBMISSION_COLUMNS = {
     "status", "generated_code", "raw_output", "used_tool_call",
     "generation_error", "eval_result", "total_score", "score_breakdown",
     "created_at", "finished_at", "generation_duration", "token_usage",
-    "model_uuid", "prompt",
+    "model_uuid", "prompt", "agent_round",
 }
 
 VALID_MODEL_COLUMNS = {
@@ -125,6 +125,8 @@ async def init_db():
         await db.execute("ALTER TABLE submissions ADD COLUMN token_usage TEXT DEFAULT '{}'")
     if "model_uuid" not in columns:
         await db.execute("ALTER TABLE submissions ADD COLUMN model_uuid TEXT DEFAULT ''")
+    if "agent_round" not in columns:
+        await db.execute("ALTER TABLE submissions ADD COLUMN agent_round INTEGER DEFAULT 0")
 
     # 迁移：rounds 表 model_ids → model_uuids
     cursor = await db.execute("PRAGMA table_info(rounds)")
@@ -304,6 +306,17 @@ async def get_submissions_by_round(round_id: str) -> list[dict]:
             result.append(d)
         return result
 
+
+
+async def get_round_progress(round_id: str) -> list[dict]:
+    """轻量级进度查询：仅返回状态字段，供前端高频轮询使用"""
+    db = await get_db()
+    async with db.execute(
+        "SELECT model_uuid, problem_id, status, agent_round, total_score FROM submissions WHERE round_id=?",
+        (round_id,)
+    ) as cursor:
+        rows = await cursor.fetchall()
+    return [dict(r) for r in rows]
 
 
 async def get_submission(round_id: str, problem_id: str, model_uuid: str) -> Optional[dict]:

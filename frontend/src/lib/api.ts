@@ -194,6 +194,19 @@ export interface ModelStats {
   problems: ModelProblem[];
 }
 
+export interface SubmissionProgress {
+  model_uuid: string;
+  problem_id: string;
+  status: string;
+  agent_round: number;
+  total_score: number;
+}
+
+export interface RoundProgress {
+  round_status: string;
+  submissions: SubmissionProgress[];
+}
+
 export interface RoundInfo {
   id: string;
   name: string;

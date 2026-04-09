@@ -386,6 +386,16 @@ async def get_rounds():
     return rounds
 
 
+@router.get("/rounds/{round_id}/progress")
+async def get_round_progress(round_id: str):
+    """轻量级进度接口，仅返回每个 submission 的状态和当前 agent 轮次，供前端高频轮询"""
+    round_data = await db.get_round(round_id)
+    if not round_data:
+        raise HTTPException(404, f"Round '{round_id}' not found")
+    progress = await db.get_round_progress(round_id)
+    return {"round_status": round_data["status"], "submissions": progress}
+
+
 @router.get("/rounds/{round_id}")
 async def get_round(round_id: str):
     round_data = await db.get_round(round_id)

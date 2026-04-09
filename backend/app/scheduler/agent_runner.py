@@ -10,7 +10,7 @@ import os
 import tempfile
 from pathlib import Path
 from dataclasses import dataclass, field, asdict
-from typing import Optional
+from typing import Optional, Callable, Awaitable
 
 from ..providers.model_provider import ModelProvider
 from ..evaluator.engine import run_eval_in_sandbox, compute_scores, EvalResult
@@ -366,9 +366,11 @@ async def run_agent(
     provider: ModelProvider,
     problem: Problem,
     total_timeout: int = AGENT_TOTAL_TIMEOUT,
+    on_progress: Optional[Callable[[int], Awaitable[None]]] = None,
 ) -> AgentRunResult:
     """
-    以 Agent 模式运行代码生成
+    以 Agent 模式运行代码生成。
+    on_progress(round_num) 在每轮开始时回调，用于实时写入进度。
     """
     result = AgentRunResult()
     start_time = time.time()
@@ -405,6 +407,13 @@ async def run_agent(
 
             result.rounds = round_num
             round_start = time.time()
+
+            # 上报进度（非阻塞，回调失败不影响主流程）
+            if on_progress:
+                try:
+                    await on_progress(round_num)
+                except Exception:
+                    pass
 
             # 调用模型（含 429 重试）
             logger.info(f"[agent] Round {round_num}: calling LLM (messages={len(messages)}, elapsed={elapsed:.0f}s)")

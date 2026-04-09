@@ -139,8 +139,14 @@ async def _process_single_gen_task(task: GenTask) -> bool:
     处理单个 generation task。
     返回 True 表示成功生成了代码（推入 eval queue 由调用者处理）。
     """
+    sub_id = task.sub_id
+
+    async def _on_progress(round_num: int):
+        await db.update_submission(sub_id, agent_round=round_num)
+
     result = await asyncio.wait_for(
-        run_agent(task.provider, task.problem, total_timeout=GEN_TIMEOUT),
+        run_agent(task.provider, task.problem, total_timeout=GEN_TIMEOUT,
+                  on_progress=_on_progress),
         timeout=GEN_TIMEOUT + 60,
     )
     task.result = result
@@ -169,6 +175,7 @@ async def _run_generation_phase(
 
         task.status = "running"
         success = False
+        await db.update_submission(task.sub_id, status="generating")
 
         for attempt in range(MAX_429_RETRIES):
             try:
