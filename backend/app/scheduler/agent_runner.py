@@ -121,18 +121,6 @@ AGENT_TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "list_files",
-            "description": "列出工作目录下的所有文件及大小",
-            "parameters": {
-                "type": "object",
-                "properties": {},
-                "required": []
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "submit",
             "description": "提交最终代码进行平台评分。确认代码已通过自测后再调用。",
             "parameters": {
@@ -369,8 +357,6 @@ def _build_agent_prompt(problem: Problem, problem_dir: Path) -> str:
 - `str_replace`：精确替换已有文件中的内容，需提供 `old_string`（原内容，必须唯一）和 `new_string`（新内容）。
 
 **read_file(path, start_line?, end_line?)** — 读取文件内容，可通过 `start_line` / `end_line` 只读取指定行范围（行号从 1 开始）。
-
-**list_files()** — 列出工作目录下的所有文件及大小。
 
 **compile()** — 编译 `solution.c`，生成 `solution.o`，返回编译结果（成功/错误/警告）。
 
@@ -662,13 +648,6 @@ async def run_agent(
                         else:
                             tool_result = f"Error: file {fpath} not found"
                     tc_record["file"] = fpath
-
-                elif fn_name == "list_files":
-                    entries = []
-                    for p in sorted(sandbox.iterdir()):
-                        if p.is_file():
-                            entries.append(f"{p.name} ({p.stat().st_size} bytes)")
-                    tool_result = "\n".join(entries) if entries else "(empty directory)"
 
                 elif fn_name == "compile":
                     comp = await _do_compile(sandbox, compile_flags)
