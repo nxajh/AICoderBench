@@ -6,8 +6,7 @@ import ModelBadge from "@/components/model-badge";
 
 interface ModelConfig {
   uuid: string;
-  provider: string;       // 显示名（如 "DeepSeek"、"GLM"）
-  provider_type: string;  // 技术类型（如 "openai"、"glm"）
+  provider: string;      // 显示名（如 "DeepSeek"、"GLM"）
   model: string;
   api_key_masked: string;
   base_url: string;
@@ -16,40 +15,12 @@ interface ModelConfig {
 }
 
 interface EditForm {
-  provider: string;       // 技术类型（对应 PROVIDER_TYPES 的 value）
-  display_name: string;   // 用户自定义显示名，留空则自动推断
+  display_name: string;
   api_model: string;
   api_key: string;
   base_url: string;
   thinking: boolean;
 }
-
-const PROVIDER_TYPES = [
-  { value: "glm",        label: "GLM (智谱)" },
-  { value: "kimi",       label: "Kimi (月之暗面)" },
-  { value: "minimax",    label: "MiniMax" },
-  { value: "openrouter", label: "OpenRouter" },
-  { value: "openai",     label: "OpenAI Compatible（通用）" },
-];
-
-const DEFAULT_BASE_URLS: Record<string, string> = {
-  glm:        "https://open.bigmodel.cn/api/coding/paas/v4",
-  kimi:       "https://api.moonshot.cn/v1",
-  minimax:    "https://api.minimaxi.com/v1",
-  openrouter: "https://openrouter.ai/api/v1",
-  // openai 类型不预填，由用户自行输入；常见预设见占位符
-};
-
-// 常见 OpenAI-compatible provider 的 base URL 提示
-const OPENAI_COMPAT_PRESETS = [
-  { label: "DeepSeek",       url: "https://api.deepseek.com/v1" },
-  { label: "Qwen (阿里云)",  url: "https://dashscope.aliyuncs.com/compatible-mode/v1" },
-  { label: "Doubao (火山)",  url: "https://ark.cn-beijing.volces.com/api/v3" },
-  { label: "Groq",           url: "https://api.groq.com/openai/v1" },
-  { label: "Together AI",    url: "https://api.together.xyz/v1" },
-  { label: "OpenAI",         url: "https://api.openai.com/v1" },
-];
-
 
 export default function ModelsPage() {
   const [models, setModels] = useState<ModelConfig[]>([]);
@@ -60,7 +31,7 @@ export default function ModelsPage() {
   const [saving, setSaving] = useState(false);
 
   function emptyForm(): EditForm {
-    return { provider: "glm", display_name: "", api_model: "", api_key: "", base_url: "", thinking: false };
+    return { display_name: "", api_model: "", api_key: "", base_url: "", thinking: false };
   }
 
   const load = async () => {
@@ -86,7 +57,6 @@ export default function ModelsPage() {
   const startEdit = (m: ModelConfig) => {
     setEditing(m.uuid);
     setForm({
-      provider: m.provider_type || m.provider,
       display_name: m.provider,
       api_model: m.model,
       api_key: "",
@@ -99,18 +69,6 @@ export default function ModelsPage() {
   const cancelEdit = () => {
     setEditing(null);
     setError("");
-  };
-
-  const handleProviderChange = (pt: string) => {
-    const label = PROVIDER_TYPES.find(p => p.value === pt)?.label ?? pt;
-    // openai 类型显示名由用户填写（有多种服务），其他固定名称直接用 label 的简写
-    const defaultDisplay = pt !== "openai" ? label.split(" ")[0] : "";
-    setForm(f => ({
-      ...f,
-      provider: pt,
-      display_name: defaultDisplay,
-      base_url: DEFAULT_BASE_URLS[pt] || "",
-    }));
   };
 
   const handleSave = async () => {
@@ -130,7 +88,14 @@ export default function ModelsPage() {
         const res = await fetch("/api/model-configs", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ provider: form.provider, display_name: form.display_name, api_model: form.api_model, api_key: form.api_key, base_url: form.base_url, thinking: form.thinking }),
+          body: JSON.stringify({
+            provider: "openai",
+            display_name: form.display_name,
+            api_model: form.api_model,
+            api_key: form.api_key,
+            base_url: form.base_url,
+            thinking: form.thinking,
+          }),
         });
         if (!res.ok) {
           const d = await res.json();
@@ -207,27 +172,21 @@ export default function ModelsPage() {
         {/* Add / Edit form */}
         {editing !== null && (
           <div className="mb-6 rounded-lg border border-gray-700 bg-gray-900 p-5">
-            <h2 className="text-lg font-semibold mb-4">{editing === "new" ? "添加模型" : <>编辑: <ModelBadge model={form.api_model} provider={form.display_name || form.provider} thinking={form.thinking} /></>}</h2>
+            <h2 className="text-lg font-semibold mb-4">
+              {editing === "new" ? "添加模型" : <>编辑: <ModelBadge model={form.api_model} provider={form.display_name} thinking={form.thinking} /></>}
+            </h2>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
-                <label className="block text-xs text-gray-400 mb-1">API 类型</label>
-                <select value={form.provider} onChange={e => handleProviderChange(e.target.value)}
-                  className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-sm">
-                  {PROVIDER_TYPES.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
-                </select>
-              </div>
-              <div>
-                <label className="block text-xs text-gray-400 mb-1">
-                  显示名称 <span className="text-gray-600">（badge 标签，留空自动填入）</span>
-                </label>
+                <label className="block text-xs text-gray-400 mb-1">显示名称</label>
                 <input value={form.display_name} onChange={e => setForm(f => ({ ...f, display_name: e.target.value }))}
                   className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-sm"
-                  placeholder={form.provider === "openai" ? "如: DeepSeek 或 Qwen" : PROVIDER_TYPES.find(p => p.value === form.provider)?.label.split(" ")[0] || ""} />
+                  placeholder="如: DeepSeek、GLM、Qwen" />
               </div>
               <div>
-                <label className="block text-xs text-gray-400 mb-1">API 模型名（调用 API 时传的 model 参数）</label>
+                <label className="block text-xs text-gray-400 mb-1">API 模型名</label>
                 <input value={form.api_model} onChange={e => setForm(f => ({ ...f, api_model: e.target.value }))}
-                  className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-sm" placeholder="如: glm-5.1 或 MiniMax-M2.7" />
+                  className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-sm"
+                  placeholder="如: deepseek-chat、glm-4-plus" />
               </div>
               <div>
                 <label className="block text-xs text-gray-400 mb-1">API Key{editing !== "new" ? "（留空保留原值）" : ""}</label>
@@ -236,42 +195,18 @@ export default function ModelsPage() {
               </div>
               <div>
                 <label className="block text-xs text-gray-400 mb-1">Base URL</label>
-                {form.provider === "openai" && (
-                  <select
-                    className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-sm mb-1 text-gray-400"
-                    value=""
-                    onChange={e => {
-                      if (!e.target.value) return;
-                      const preset = OPENAI_COMPAT_PRESETS.find(p => p.url === e.target.value);
-                      setForm(f => ({
-                        ...f,
-                        base_url: e.target.value,
-                        display_name: f.display_name || (preset?.label ?? ""),
-                      }));
-                    }}
-                  >
-                    <option value="">— 选择常见预设 —</option>
-                    {OPENAI_COMPAT_PRESETS.map(p => (
-                      <option key={p.url} value={p.url}>{p.label}: {p.url}</option>
-                    ))}
-                  </select>
-                )}
                 <input value={form.base_url} onChange={e => setForm(f => ({ ...f, base_url: e.target.value }))}
                   className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-sm"
-                  placeholder={form.provider === "openai" ? "https://api.example.com/v1" : ""} />
+                  placeholder="https://api.example.com/v1" />
               </div>
-              {form.provider === "glm" && (
-                <div className="flex items-center gap-2">
-                  <input type="checkbox" id="thinking" checked={form.thinking}
-                    onChange={e => setForm(f => ({ ...f, thinking: e.target.checked }))}
-                    className="rounded" />
-                  <label htmlFor="thinking" className="text-sm text-gray-300">启用思考模式</label>
-                </div>
-              )}
+              <div className="flex items-center gap-2 sm:col-span-2">
+                <input type="checkbox" id="thinking" checked={form.thinking}
+                  onChange={e => setForm(f => ({ ...f, thinking: e.target.checked }))}
+                  className="rounded" />
+                <label htmlFor="thinking" className="text-sm text-gray-300">启用思考模式（extended thinking）</label>
+              </div>
             </div>
-            <div className="mt-3 text-xs text-gray-500">
-              模型将获得唯一 UUID 作为内部标识
-            </div>
+            <div className="mt-3 text-xs text-gray-500">模型将获得唯一 UUID 作为内部标识</div>
             <div className="flex gap-3 mt-5">
               <button onClick={handleSave} disabled={saving}
                 className="px-5 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-sm text-white disabled:opacity-50">

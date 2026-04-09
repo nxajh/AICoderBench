@@ -22,12 +22,12 @@ class CreateRoundRequest(BaseModel):
 
 
 class CreateModelRequest(BaseModel):
-    provider: str       # 技术类型: glm / kimi / minimax / openrouter / openai
-    api_model: str      # API 调用时传的 model 参数
+    provider: str = "openai"   # 技术类型，目前统一使用 openai-compatible
+    api_model: str             # API 调用时传的 model 参数
     api_key: str
     base_url: str = ""
     thinking: bool = False
-    display_name: str = ""  # 显示名称，留空则自动推断
+    display_name: str = ""     # 显示名称，留空则自动推断
 
 
 class UpdateModelRequest(BaseModel):
@@ -260,10 +260,6 @@ async def list_model_configs():
 @router.post("/model-configs")
 async def create_model_config(req: CreateModelRequest):
     """添加新模型"""
-    valid_providers = ["glm", "kimi", "minimax", "openrouter", "openai"]
-    if req.provider not in valid_providers:
-        raise HTTPException(400, f"Invalid provider_type, must be one of: {valid_providers}")
-
     existing = await db.get_model_by_provider_model(req.provider, req.api_model, req.thinking)
     if existing:
         raise HTTPException(400, f"Model with provider={req.provider}, api_model={req.api_model}, thinking={req.thinking} already exists")
