@@ -85,13 +85,39 @@ async def run_benchmark(
         await db.create_round(round_id, problem_ids, model_uuids, round_name)
         await db.update_round_status(round_id, "running")
 
+    try:
+        await _run_benchmark_inner(round_id, problem_ids, model_uuids, providers)
+    except Exception as e:
+        logger.error(f"Round {round_id}: unexpected error: {e}", exc_info=True)
+        await db.update_round_status(round_id, "failed")
+        # 把仍在 pending/generating 的 submission 标记为 failed，避免永久卡住
+        subs = await db.get_submissions_by_round(round_id)
+        for s in subs:
+            if s.get("status") in ("pending", "generating", "evaluating"):
+                await db.update_submission(
+                    s["id"], status="failed",
+                    generation_error=f"scheduler crash: {e}",
+                    finished_at=datetime.utcnow().isoformat(),
+                )
+    return round_id
+
+
+async def _run_benchmark_inner(
+    round_id: str,
+    problem_ids: list[str],
+    model_uuids: list[str],
+    providers: dict[str, ModelProvider],
+) -> None:
+    """实际调度逻辑，由 run_benchmark 包裹异常处理。"""
+
     # 构建任务列表
     gen_tasks: list[GenTask] = []
     for pid in problem_ids:
         slug = await db.get_problem_slug_by_uuid(pid)
-        problem = load_problem(slug or pid)
-        if not problem:
-            logger.warning(f"Problem not found: {pid}")
+        try:
+            problem = load_problem(slug or pid)
+        except (FileNotFoundError, ValueError) as e:
+            logger.warning(f"Problem not found, skipping {pid}: {e}")
             continue
         for mid in model_uuids:
             if mid not in providers:
@@ -104,7 +130,7 @@ async def run_benchmark(
 
     if not gen_tasks:
         await db.update_round_status(round_id, "failed")
-        return round_id
+        return
 
     for task in gen_tasks:
         task.sub_id = await db.create_submission(round_id, task.problem_uuid, task.model_uuid)
@@ -162,7 +188,6 @@ async def run_benchmark(
         await asyncio.gather(*spawned_evals, return_exceptions=True)
 
     await db.update_round_status(round_id, "done")
-    return round_id
 
 
 # ---- Generation ----

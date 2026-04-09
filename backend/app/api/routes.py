@@ -22,12 +22,12 @@ class CreateRoundRequest(BaseModel):
 
 
 class CreateModelRequest(BaseModel):
-    provider: str       # 技术类型: glm / kimi / minimax / openrouter / openai
-    api_model: str      # API 调用时传的 model 参数
+    provider: str = "openai"   # 技术类型，目前统一使用 openai-compatible
+    api_model: str             # API 调用时传的 model 参数
     api_key: str
     base_url: str = ""
     thinking: bool = False
-    display_name: str = ""  # 显示名称，留空则自动推断
+    display_name: str = ""     # 显示名称，留空则自动推断
 
 
 class UpdateModelRequest(BaseModel):
@@ -38,7 +38,8 @@ class UpdateModelRequest(BaseModel):
 
 
 class CreateProblemRequest(BaseModel):
-    id: str
+    id: str = ""        # 留空则自动生成（优先用 slug 拼接）
+    slug: str = ""      # 英文标识，如 thread-pool；与序号拼成目录名
     title: str
     difficulty: str = "medium"
     tags: list[str] = []
@@ -131,18 +132,33 @@ async def get_problem(problem_id: str):
 @router.post("/problems")
 async def create_problem_api(req: CreateProblemRequest):
     """创建新题目"""
-    import re
-    if not re.match(r'^[a-zA-Z0-9_-]+$', req.id):
-        raise HTTPException(400, "ID 只能包含字母、数字、下划线和连字符")
+    import re, uuid as _uuid
     if not req.title.strip():
         raise HTTPException(400, "标题不能为空")
+
+    # 自动生成 ID：序号 + 英文 slug（如 11-thread-pool），slug 留空则仅用序号（11）
+    problem_id = req.id.strip()
+    if not problem_id:
+        from ..config import PROBLEMS_DIR
+        existing = [d for d in PROBLEMS_DIR.iterdir() if d.is_dir() and (d / "problem.json").exists()] if PROBLEMS_DIR.exists() else []
+        next_num = len(existing) + 1
+        slug = req.slug.strip()
+        if slug:
+            if not re.match(r'^[a-zA-Z0-9_-]+$', slug):
+                raise HTTPException(400, "英文标识只能包含字母、数字、下划线和连字符")
+            problem_id = f"{next_num:02d}-{slug}"
+        else:
+            problem_id = f"{next_num:02d}"
+    elif not re.match(r'^[a-zA-Z0-9_-]+$', problem_id):
+        raise HTTPException(400, "ID 只能包含字母、数字、下划线和连字符")
+
     if req.scoring:
         weight_total = sum(v for v in req.scoring.values() if isinstance(v, (int, float)))
         if weight_total != 100:
             raise HTTPException(400, f"scoring 权重之和须为 100，当前为 {weight_total}")
     try:
         prob = create_problem(
-            id=req.id,
+            id=problem_id,
             title=req.title,
             difficulty=req.difficulty,
             tags=req.tags,
@@ -156,7 +172,7 @@ async def create_problem_api(req: CreateProblemRequest):
         # 文件已写入，同步到数据库（权威来源是文件）
         await db.sync_problems_from_disk()
         # 返回带 uuid 的版本
-        p = await db.get_problem_by_slug(req.id)
+        p = await db.get_problem_by_slug(problem_id)
         return p if p else prob.model_dump()
     except FileExistsError as e:
         raise HTTPException(409, str(e))
@@ -260,10 +276,6 @@ async def list_model_configs():
 @router.post("/model-configs")
 async def create_model_config(req: CreateModelRequest):
     """添加新模型"""
-    valid_providers = ["glm", "kimi", "minimax", "openrouter", "openai"]
-    if req.provider not in valid_providers:
-        raise HTTPException(400, f"Invalid provider_type, must be one of: {valid_providers}")
-
     existing = await db.get_model_by_provider_model(req.provider, req.api_model, req.thinking)
     if existing:
         raise HTTPException(400, f"Model with provider={req.provider}, api_model={req.api_model}, thinking={req.thinking} already exists")
