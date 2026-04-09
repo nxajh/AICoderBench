@@ -364,6 +364,30 @@ def _build_agent_prompt(problem: Problem, problem_dir: Path) -> str:
 
 **submit()** — 提交最终代码进行平台评分。
 
+## 编码规范
+
+**编译质量**
+- 消除所有编译警告，不得出现 `-Wall -Wextra` 产生的警告
+
+**内存管理**
+- 所有 `malloc` / `calloc` / `realloc` 分配的内存必须在适当时机 `free`
+- 避免内存泄漏、重复释放、越界访问
+
+**线程安全**（并发相关题目）
+- 共享数据必须用互斥锁（`pthread_mutex_t`）或其他同步原语保护
+- 避免竞态条件和死锁
+
+**禁用危险 API**
+- 禁止使用 `gets`、`strcpy`、`strcat`、`sprintf`、`system`
+- 使用对应的安全版本：`fgets`、`strncpy`、`strncat`、`snprintf`
+
+**代码结构**
+- 函数职责单一，避免过长的函数体
+- 控制流不宜过于复杂，深层嵌套时考虑拆分子函数
+
+**注释**
+- 对关键逻辑、算法思路、同步策略添加必要注释
+
 ## 建议工作流程
 
 1. 用 `write_file(create)` 写 `solution.c`（实现接口）和 `test_self.c`（自测代码）
