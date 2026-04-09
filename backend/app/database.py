@@ -134,9 +134,11 @@ async def init_db():
     if "model_ids" in round_columns and "model_uuids" not in round_columns:
         await db.execute("ALTER TABLE rounds RENAME COLUMN model_ids TO model_uuids")
 
-    # 迁移：submissions model_uuid 为空时用 model_id 填充（仅旧库有 model_id 列时执行）
+    # 迁移：submissions model_uuid 为空时用 model_id 填充，再删除冗余的 model_id 列
+    # model_id 是旧 schema 的 NOT NULL 字段；不删除会导致新 INSERT 因缺少该列而失败
     if "model_id" in columns:
         await db.execute("UPDATE submissions SET model_uuid = model_id WHERE model_uuid = '' AND model_id != ''")
+        await db.execute("ALTER TABLE submissions DROP COLUMN model_id")
 
     # 迁移：扩展 models 表
     cursor = await db.execute("PRAGMA table_info(models)")
