@@ -109,9 +109,10 @@ async def run_benchmark(
         task.sub_id = await db.create_submission(round_id, task.problem_uuid, task.model_uuid)
 
     n_models = len({t.model_uuid for t in gen_tasks})
+    n_providers = len({t.provider.provider_id for t in gen_tasks})
     logger.info(
         f"Round {round_id}: {len(gen_tasks)} tasks, "
-        f"{n_models} models (parallel), "
+        f"{n_models} models / {n_providers} providers (providers parallel), "
         f"eval_concurrency={SANDBOX_CONCURRENCY}"
     )
 
@@ -136,17 +137,17 @@ async def run_benchmark(
         t = asyncio.create_task(_run_eval_with_sem(eval_task, eval_sem))
         spawned_evals.append(t)
 
-    # 同一模型的题目串行（避免自身 429），不同模型并行
-    by_model: dict[str, list[GenTask]] = {}
+    # 同一 provider 的任务串行（避免触发 provider 级限速），不同 provider 并行
+    by_provider: dict[str, list[GenTask]] = {}
     for task in gen_tasks:
-        by_model.setdefault(task.model_uuid, []).append(task)
+        by_provider.setdefault(task.provider.provider_id, []).append(task)
 
-    async def _run_model_group(tasks: list[GenTask]):
+    async def _run_provider_group(tasks: list[GenTask]):
         for task in tasks:
             await _gen_then_eval(task)
 
     await asyncio.gather(
-        *[_run_model_group(tasks) for tasks in by_model.values()]
+        *[_run_provider_group(tasks) for tasks in by_provider.values()]
     )
 
     # 等待所有已派发的评测任务完成
