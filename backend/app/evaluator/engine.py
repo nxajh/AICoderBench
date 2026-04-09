@@ -1,5 +1,5 @@
 """
-评测引擎 — 在 Docker 沙箱中执行评测流水线
+评测引擎 — 使用 Docker SDK 在 aicoderbench-eval 沙箱中执行评测流水线
 """
 import json
 import asyncio
@@ -11,11 +11,11 @@ from pathlib import Path
 from dataclasses import dataclass, field, asdict
 from typing import Optional
 
-import httpx
+import docker as docker_module
+
+from ..config import DOCKER_IMAGE
 
 logger = logging.getLogger(__name__)
-
-EVAL_SCRIPT_PATH = Path(__file__).parent.parent.parent / "sandbox" / "eval.sh"
 
 
 @dataclass
@@ -83,7 +83,7 @@ def compute_scores(result: EvalResult, scoring: dict, token_usage: dict = None,
     """根据评测结果和评分配置计算分数
 
     Args:
-        concurrent: 是否为并发题。影响 TSan 扣分（非并发题不检测 TSan）
+        concurrent: 是否为并发题。影响 TSan/Helgrind 扣分（非并发题不检测）
     """
     weights = scoring or {
         "compile": 10, "tests": 25, "safety": 25,
@@ -166,23 +166,19 @@ def compute_scores(result: EvalResult, scoring: dict, token_usage: dict = None,
     #   优先使用 Valgrind memcheck（更精确），否则回退到 ASan 泄漏计数
     resource_weight = weights.get("resource", 15)
     if result.valgrind_leaks > 0:
-        # valgrind 已运行且检测到泄漏
         result.score_resource = max(0, resource_weight - result.valgrind_leaks * 3)
     elif result.compile_asan_success and result.asan_output:
-        # 回退：从 ASan 输出统计直接/间接泄漏块（各自一行 "Direct/Indirect leak"）
         direct_leaks = len(re.findall(r'Direct leak', result.asan_output))
         indirect_leaks = len(re.findall(r'Indirect leak', result.asan_output))
         leak_count = direct_leaks + indirect_leaks
         result.score_resource = max(0, resource_weight - leak_count * 3)
     else:
-        # 无泄漏检测数据则给满分
         result.score_resource = resource_weight
 
     # 性能：与 perf_baseline_ms 对比
     perf_weight = weights.get("performance", 10)
     perf_baseline_ms = weights.get("perf_baseline_ms", 0)
     if perf_baseline_ms <= 0 or result.exec_time_ms <= 0:
-        # 基准未配置或无执行时间，给满分
         result.score_performance = perf_weight
     else:
         ratio = result.exec_time_ms / perf_baseline_ms
@@ -210,15 +206,16 @@ async def run_eval_in_sandbox(
     memory: str = "128m",
 ) -> EvalResult:
     """
-    在本地运行评测（不使用 Docker 沙箱）
+    在 Docker 沙箱（aicoderbench-eval 镜像）中运行评测。
+
+    工作流程：
+    1. 将代码和题目文件写入临时目录
+    2. 将临时目录挂载到容器的 /sandbox
+    3. 容器内运行 /eval.sh，结果写入 /sandbox/result.json
+    4. 读回 result.json，计算评分
     """
-    logger.info("run_eval_in_sandbox: start")
-    import asyncio.subprocess
-
     result = EvalResult()
-
-    # 读取外部评测脚本
-    eval_script = EVAL_SCRIPT_PATH.read_text()
+    loop = asyncio.get_running_loop()
 
     with tempfile.TemporaryDirectory() as tmpdir:
         sandbox = Path(tmpdir)
@@ -227,16 +224,12 @@ async def run_eval_in_sandbox(
         for filename, content in code_files.items():
             (sandbox / filename).write_text(content)
 
-        # 复制题目测试文件
+        # 复制题目测试文件（test.c、test_framework.h、solution.h 等）
         for f in problem_dir.iterdir():
             if f.name not in code_files and f.is_file():
                 (sandbox / f.name).write_text(f.read_text())
 
-        # 写入评测脚本
-        (sandbox / "eval.sh").write_text(eval_script)
-        os.chmod(sandbox / "eval.sh", 0o755)
-
-        # 读取 problem.json 获取编译参数和并发标志
+        # 读取 problem.json：编译参数、评分权重、并发标志
         extra_flags = ""
         scoring = {}
         concurrent = True
@@ -247,73 +240,85 @@ async def run_eval_in_sandbox(
             scoring = pdata.get("scoring", {})
             concurrent = pdata.get("concurrent", True)
 
+        container = None
         try:
-            cmd = [
-                "bash", str(sandbox / "eval.sh"),
-                str(sandbox / "result.json"),
-                "solution.c",
-                "",
-                extra_flags,
-                "1" if concurrent else "0",
-            ]
+            client = docker_module.from_env()
+            container = await loop.run_in_executor(None, lambda: client.containers.create(
+                image=DOCKER_IMAGE,
+                command=[
+                    "bash", "/eval.sh",
+                    "/sandbox/result.json",   # $1 结果文件
+                    "solution.c",             # $2 代码文件
+                    "",                       # $3 头文件（暂未使用）
+                    extra_flags or "",        # $4 额外编译参数
+                    "1" if concurrent else "0",  # $5 是否并发题
+                ],
+                volumes={str(sandbox): {"bind": "/sandbox", "mode": "rw"}},
+                mem_limit=memory,
+                nano_cpus=int(1e9),       # 1 CPU
+                network_disabled=True,
+                working_dir="/sandbox",
+                environment={
+                    "TEST_TIMEOUT":        "30",
+                    "TSAN_TEST_TIMEOUT":   "60",
+                    "ASAN_TEST_TIMEOUT":   "60",
+                    "VALGRIND_TIMEOUT":    "60",
+                    "HELGRIND_TIMEOUT":    "60",
+                },
+            ))
 
-            logger.info(f"Running evaluation: {' '.join(cmd[:3])} ...")
+            await loop.run_in_executor(None, container.start)
+            logger.info(f"Started eval container {container.short_id}")
 
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=str(sandbox),
-            )
-
-            stdout_bytes = None
-            stderr_bytes = None
+            # 等待容器退出，超时则 kill
+            # 使用 shield 防止 wait_for 取消后 wait() 线程悬空
+            wait_fut = loop.run_in_executor(None, container.wait)
             try:
-                stdout_bytes, stderr_bytes = await asyncio.wait_for(process.communicate(), timeout=timeout)
-                returncode = process.returncode
-                logger.info(f"Evaluation exit code: {returncode}")
-                if stderr_bytes:
-                    logger.debug(f"Evaluation stderr: {stderr_bytes.decode()}")
+                await asyncio.wait_for(asyncio.shield(wait_fut), timeout=timeout)
             except asyncio.TimeoutError:
-                process.kill()
-                await process.wait()
+                await loop.run_in_executor(None, container.kill)
+                await wait_fut   # kill 后 wait() 会立即返回
                 result.timed_out = True
                 result.error = "evaluation timed out"
-                logger.warning(f"Evaluation timed out after {timeout}s")
-            except Exception as e:
-                process.kill()
-                await process.wait()
-                result.error = str(e)
-                logger.error(f"Evaluation error: {e}")
+                logger.warning(f"Container {container.short_id} timed out after {timeout}s")
 
-            # 读取结果
-            result_file = sandbox / "result.json"
-            if result_file.exists():
-                data = json.loads(result_file.read_text())
-                logger.info(f"Result data keys: {list(data.keys())}")
-                for key, value in data.items():
-                    if hasattr(result, key):
-                        setattr(result, key, value)
-                logger.info(f"Compile success: {result.compile_success}")
-                logger.info(f"Compile errors: {result.compile_errors[:100] if result.compile_errors else 'None'}")
-            else:
-                stdout_text = stdout_bytes.decode() if stdout_bytes else 'N/A'
-                stderr_text = stderr_bytes.decode() if stderr_bytes else 'N/A'
-                result.error = f"result.json not found; stdout: {stdout_text}, stderr: {stderr_text}"
-                logger.error(result.error)
-
-            # 从 stdout 解析 EXEC_TIME_MS
-            if stdout_bytes:
-                for line in stdout_bytes.decode(errors='replace').splitlines():
-                    m = re.match(r'^EXEC_TIME_MS:(\d+)', line.strip())
-                    if m:
-                        result.exec_time_ms = int(m.group(1))
-                        break
+            # 解析 EXEC_TIME_MS（来自 stdout）
+            logs = await loop.run_in_executor(
+                None, lambda: container.logs(stdout=True, stderr=False)
+            )
+            for line in logs.decode(errors="replace").splitlines():
+                m = re.match(r"^EXEC_TIME_MS:(\d+)", line.strip())
+                if m:
+                    result.exec_time_ms = int(m.group(1))
+                    break
 
         except Exception as e:
             result.error = str(e)
-            logger.error(f"Evaluation error: {e}")
+            logger.error(f"Docker error: {e}")
 
-    # 计算评分（concurrent 已在 with 块内读取）
+        finally:
+            if container is not None:
+                try:
+                    await loop.run_in_executor(None, lambda: container.remove(force=True))
+                    logger.debug(f"Removed container {container.short_id}")
+                except Exception:
+                    pass
+
+        # 读取结果文件（容器写入 /sandbox/result.json = tmpdir/result.json）
+        result_file = sandbox / "result.json"
+        if result_file.exists():
+            data = json.loads(result_file.read_text())
+            logger.info(f"Result keys: {list(data.keys())}")
+            for key, value in data.items():
+                if hasattr(result, key):
+                    setattr(result, key, value)
+            logger.info(
+                f"compile={result.compile_success} "
+                f"tests={result.tests_passed}/{result.tests_total}"
+            )
+        elif not result.error:
+            result.error = "result.json not found after container run"
+            logger.error(result.error)
+
     compute_scores(result, scoring, token_usage=None, concurrent=concurrent)
     return result

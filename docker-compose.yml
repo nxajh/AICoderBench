@@ -1,4 +1,11 @@
 services:
+  # 评测沙箱镜像 — 仅用于构建 aicoderbench-eval 镜像，不作为常驻服务运行
+  sandbox:
+    build:
+      context: ./sandbox
+    image: aicoderbench-eval
+    command: /bin/true
+
   backend:
     build:
       context: ./backend
@@ -7,12 +14,12 @@ services:
       - "8000:8000"
     volumes:
       - ./problems:/app/problems:ro
-      - ./sandbox:/app/sandbox:ro
       - eval-data:/app/data
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - DATABASE_URL=sqlite:////app/data/aicoderbench.db
-    depends_on: []
+    depends_on:
+      - sandbox
 
   frontend:
     build:
