@@ -16,6 +16,7 @@ export default function NewProblemPage() {
   const [error, setError] = useState("");
   const [form, setForm] = useState({
     title: "",
+    slug: "",
     difficulty: "medium",
     tags: "",
     language: "c",
@@ -40,6 +41,7 @@ export default function NewProblemPage() {
     try {
       const created = await postAPI<{ slug?: string; id?: string }>("/api/problems", {
         title: form.title,
+        slug: form.slug.trim() || undefined,
         difficulty: form.difficulty,
         tags: form.tags.split(",").map(t => t.trim()).filter(Boolean),
         language: form.language,
@@ -81,10 +83,16 @@ export default function NewProblemPage() {
           <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 space-y-4">
             <h2 className="text-lg font-semibold">基本信息</h2>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="sm:col-span-2">
+              <div>
                 <label className="block text-xs text-gray-400 mb-1">标题 *</label>
                 <input value={form.title} onChange={e => setForm(f => ({ ...f, title: e.target.value }))}
                   className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-sm" placeholder="如: 线程池实现" required />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-400 mb-1">英文标识 <span className="text-gray-600">（可选，用于目录名）</span></label>
+                <input value={form.slug} onChange={e => setForm(f => ({ ...f, slug: e.target.value }))}
+                  className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-sm" placeholder="如: thread-pool" />
+                <p className="text-xs text-gray-600 mt-1">留空则仅用序号，如 11</p>
               </div>
               <div>
                 <label className="block text-xs text-gray-400 mb-1">难度</label>

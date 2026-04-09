@@ -38,7 +38,8 @@ class UpdateModelRequest(BaseModel):
 
 
 class CreateProblemRequest(BaseModel):
-    id: str = ""        # 留空则自动生成
+    id: str = ""        # 留空则自动生成（优先用 slug 拼接）
+    slug: str = ""      # 英文标识，如 thread-pool；与序号拼成目录名
     title: str
     difficulty: str = "medium"
     tags: list[str] = []
@@ -135,13 +136,19 @@ async def create_problem_api(req: CreateProblemRequest):
     if not req.title.strip():
         raise HTTPException(400, "标题不能为空")
 
-    # 自动生成 ID：按现有题目数量定序号，加随机短码避免冲突
+    # 自动生成 ID：序号 + 英文 slug（如 11-thread-pool），slug 留空则仅用序号（11）
     problem_id = req.id.strip()
     if not problem_id:
         from ..config import PROBLEMS_DIR
         existing = [d for d in PROBLEMS_DIR.iterdir() if d.is_dir() and (d / "problem.json").exists()] if PROBLEMS_DIR.exists() else []
         next_num = len(existing) + 1
-        problem_id = f"{next_num:02d}-{_uuid.uuid4().hex[:6]}"
+        slug = req.slug.strip()
+        if slug:
+            if not re.match(r'^[a-zA-Z0-9_-]+$', slug):
+                raise HTTPException(400, "英文标识只能包含字母、数字、下划线和连字符")
+            problem_id = f"{next_num:02d}-{slug}"
+        else:
+            problem_id = f"{next_num:02d}"
     elif not re.match(r'^[a-zA-Z0-9_-]+$', problem_id):
         raise HTTPException(400, "ID 只能包含字母、数字、下划线和连字符")
 
