@@ -18,6 +18,7 @@ from ..providers.model_provider import ModelProvider
 from ..evaluator.engine import run_eval_in_sandbox, compute_scores, EvalResult
 from ..models.problem import Problem, load_problem, list_problems, _find_problem_dir
 from .agent_runner import run_agent, AgentRunResult
+from ..config import SANDBOX_CONCURRENCY
 from .. import database as db
 
 logger = logging.getLogger(__name__)
@@ -304,64 +305,81 @@ async def _run_evaluation_phase(
     eval_queue: list[EvalTask],
 ):
     """
-    Evaluation 阶段：顺序执行沙箱评测
-    Docker 资源有限，不并行
+    Evaluation 阶段：信号量控制并发，同时运行 SANDBOX_CONCURRENCY 个容器。
+    并发数由 config.py 在启动时根据机器配置自动推算（可通过环境变量覆盖）。
     """
-    for task in eval_queue:
-        await db.update_submission(task.sub_id, status="evaluating")
+    if not eval_queue:
+        return
 
-        problem_dir = _find_problem_dir(task.problem.id)
+    sem = asyncio.Semaphore(SANDBOX_CONCURRENCY)
+    logger.info(
+        f"Evaluation phase: {len(eval_queue)} tasks, "
+        f"concurrency={SANDBOX_CONCURRENCY}"
+    )
 
-        # 评测（带简单重试）
-        eval_result = await _eval_with_retry(task.code_files, problem_dir)
+    async def _run_one(task: EvalTask):
+        async with sem:
+            await _run_eval_task(task)
 
-        # 读取 problem.json 获取 concurrent 和 perf_baseline_ms
-        problem_json = problem_dir / "problem.json"
-        concurrent = True
-        perf_baseline_ms = 0
-        if problem_json.exists():
-            pdata = json.loads(problem_json.read_text())
-            concurrent = pdata.get("concurrent", True)
-            perf_baseline_ms = pdata.get("perf_baseline_ms", 0)
+    await asyncio.gather(*[_run_one(t) for t in eval_queue])
 
-        # 计算分数
-        scoring = task.problem.scoring.model_dump() if hasattr(task.problem.scoring, 'model_dump') else {}
-        scoring["perf_baseline_ms"] = perf_baseline_ms
-        compute_scores(eval_result, scoring, token_usage=task.token_usage, concurrent=concurrent)
 
-        score_breakdown = {
-            "compile": eval_result.score_compile,
-            "tests": eval_result.score_tests,
-            "safety": eval_result.score_safety,
-            "quality": eval_result.score_quality,
-            "resource": eval_result.score_resource,
-            "performance": eval_result.score_performance,
-        }
+async def _run_eval_task(task: EvalTask):
+    """单个评测任务的完整流程（状态更新 → 沙箱运行 → 打分 → 入库）"""
+    await db.update_submission(task.sub_id, status="evaluating")
 
-        expected_total = sum(score_breakdown.values())
-        if expected_total != eval_result.score_total:
-            logger.warning(
-                f"[{task.model_uuid}] {task.problem.id}: "
-                f"score_breakdown sum ({expected_total}) != score_total ({eval_result.score_total}), correcting"
-            )
-            eval_result.score_total = expected_total
+    problem_dir = _find_problem_dir(task.problem.id)
 
-        final_status = "done" if not eval_result.error else "failed"
-        await db.update_submission(
-            task.sub_id,
-            status=final_status,
-            eval_result=json.dumps(asdict(eval_result), ensure_ascii=False),
-            total_score=eval_result.score_total,
-            score_breakdown=json.dumps(score_breakdown),
-            finished_at=datetime.utcnow().isoformat(),
-        )
+    # 评测（带简单重试）
+    eval_result = await _eval_with_retry(task.code_files, problem_dir)
 
-        logger.info(
+    # 读取 problem.json 获取 concurrent 和 perf_baseline_ms
+    problem_json = problem_dir / "problem.json"
+    concurrent = True
+    perf_baseline_ms = 0
+    if problem_json.exists():
+        pdata = json.loads(problem_json.read_text())
+        concurrent = pdata.get("concurrent", True)
+        perf_baseline_ms = pdata.get("perf_baseline_ms", 0)
+
+    # 计算分数
+    scoring = task.problem.scoring.model_dump() if hasattr(task.problem.scoring, 'model_dump') else {}
+    scoring["perf_baseline_ms"] = perf_baseline_ms
+    compute_scores(eval_result, scoring, token_usage=task.token_usage, concurrent=concurrent)
+
+    score_breakdown = {
+        "compile": eval_result.score_compile,
+        "tests": eval_result.score_tests,
+        "safety": eval_result.score_safety,
+        "quality": eval_result.score_quality,
+        "resource": eval_result.score_resource,
+        "performance": eval_result.score_performance,
+    }
+
+    expected_total = sum(score_breakdown.values())
+    if expected_total != eval_result.score_total:
+        logger.warning(
             f"[{task.model_uuid}] {task.problem.id}: "
-            f"compile={'✓' if eval_result.compile_success else '✗'} "
-            f"tests={eval_result.tests_passed}/{eval_result.tests_total} "
-            f"score={eval_result.score_total}"
+            f"score_breakdown sum ({expected_total}) != score_total ({eval_result.score_total}), correcting"
         )
+        eval_result.score_total = expected_total
+
+    final_status = "done" if not eval_result.error else "failed"
+    await db.update_submission(
+        task.sub_id,
+        status=final_status,
+        eval_result=json.dumps(asdict(eval_result), ensure_ascii=False),
+        total_score=eval_result.score_total,
+        score_breakdown=json.dumps(score_breakdown),
+        finished_at=datetime.utcnow().isoformat(),
+    )
+
+    logger.info(
+        f"[{task.model_uuid}] {task.problem.id}: "
+        f"compile={'✓' if eval_result.compile_success else '✗'} "
+        f"tests={eval_result.tests_passed}/{eval_result.tests_total} "
+        f"score={eval_result.score_total}"
+    )
 
 
 async def _eval_with_retry(code_files: dict, problem_dir: Path, max_retries: int = 2) -> EvalResult:
