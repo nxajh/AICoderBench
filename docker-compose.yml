@@ -16,8 +16,11 @@ services:
       - ./problems:/app/problems:ro
       - eval-data:/app/data
       - /var/run/docker.sock:/var/run/docker.sock
+      # 共享宿主机路径，使 backend 容器创建的 sandbox 子目录对 Docker daemon 可见
+      - /tmp/aicoderbench_eval:/tmp/aicoderbench_eval:rw
     environment:
       - DATABASE_URL=sqlite:////app/data/aicoderbench.db
+      - EVAL_TMPDIR=/tmp/aicoderbench_eval
     depends_on:
       - sandbox
 

@@ -4,9 +4,10 @@
 import json
 import asyncio
 import logging
-import tempfile
 import os
 import re
+import shutil
+import uuid as _uuid_module
 from pathlib import Path
 from dataclasses import dataclass, field, asdict
 from typing import Optional
@@ -16,6 +17,11 @@ import docker as docker_module
 from ..config import DOCKER_IMAGE
 
 logger = logging.getLogger(__name__)
+
+# 沙箱临时目录根路径。Docker-in-Docker 场景下，backend 容器通过 /var/run/docker.sock
+# 使用宿主机 Docker daemon 创建 eval 容器，volume 路径由宿主机 daemon 解析。
+# 因此必须使用宿主机与 backend 容器共享的 bind-mount 路径，不能用 tempfile（仅容器内可见）。
+EVAL_TMPDIR = os.environ.get("EVAL_TMPDIR", "/tmp/aicoderbench_eval")
 
 # Docker 客户端单例（避免每次 eval 新建连接耗尽文件描述符）
 _docker_client = None
@@ -227,9 +233,12 @@ async def run_eval_in_sandbox(
     result = EvalResult()
     loop = asyncio.get_running_loop()
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        sandbox = Path(tmpdir)
-
+    # 在宿主机与 backend 容器共享的目录下创建独立 sandbox 子目录。
+    # Docker-in-Docker 场景：backend 通过 /var/run/docker.sock 使用宿主机 Docker daemon，
+    # volume 路径由宿主机解析，必须使用宿主机和 backend 容器都能访问的共享路径。
+    sandbox = Path(EVAL_TMPDIR) / _uuid_module.uuid4().hex
+    sandbox.mkdir(parents=True, exist_ok=True)
+    try:
         # 写入模型生成的代码
         for filename, content in code_files.items():
             (sandbox / filename).write_text(content)
@@ -314,7 +323,7 @@ async def run_eval_in_sandbox(
                 except Exception:
                     pass
 
-        # 读取结果文件（容器写入 /sandbox/result.json = tmpdir/result.json）
+        # 读取结果文件（容器写入 /sandbox/result.json）
         result_file = sandbox / "result.json"
         if result_file.exists():
             try:
@@ -347,5 +356,8 @@ async def run_eval_in_sandbox(
         elif not result.error:
             result.error = "result.json not found after container run"
             logger.error(result.error)
+
+    finally:
+        shutil.rmtree(str(sandbox), ignore_errors=True)
 
     return result

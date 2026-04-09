@@ -135,10 +135,51 @@ async def init_db():
         await db.execute("ALTER TABLE rounds RENAME COLUMN model_ids TO model_uuids")
 
     # 迁移：submissions model_uuid 为空时用 model_id 填充，再删除冗余的 model_id 列
-    # model_id 是旧 schema 的 NOT NULL 字段；不删除会导致新 INSERT 因缺少该列而失败
+    # model_id 是旧 schema 的 NOT NULL 字段；不删除会导致新 INSERT 因缺少该列而失败。
+    # 用表重建代替 ALTER TABLE DROP COLUMN，兼容带约束的旧 schema 和所有 SQLite 版本。
     if "model_id" in columns:
         await db.execute("UPDATE submissions SET model_uuid = model_id WHERE model_uuid = '' AND model_id != ''")
-        await db.execute("ALTER TABLE submissions DROP COLUMN model_id")
+        # 重新读取当前列（ADD COLUMN 迁移已执行）
+        cursor2 = await db.execute("PRAGMA table_info(submissions)")
+        current_cols = [row[1] for row in await cursor2.fetchall()]
+        target_cols = {
+            "id", "round_id", "problem_id", "model_uuid", "status", "prompt",
+            "generated_code", "raw_output", "used_tool_call", "generation_error",
+            "eval_result", "total_score", "score_breakdown", "created_at",
+            "finished_at", "generation_duration", "token_usage", "agent_round",
+        }
+        copy_cols = [c for c in current_cols if c in target_cols]
+        cols_str = ", ".join(copy_cols)
+        await db.execute("""
+            CREATE TABLE submissions_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                round_id TEXT NOT NULL,
+                problem_id TEXT NOT NULL,
+                model_uuid TEXT NOT NULL,
+                status TEXT DEFAULT 'pending',
+                prompt TEXT DEFAULT '',
+                generated_code TEXT DEFAULT '',
+                raw_output TEXT DEFAULT '',
+                used_tool_call INTEGER DEFAULT 0,
+                generation_error TEXT DEFAULT '',
+                eval_result TEXT DEFAULT '',
+                total_score REAL DEFAULT 0,
+                score_breakdown TEXT DEFAULT '{}',
+                created_at TEXT DEFAULT '',
+                finished_at TEXT DEFAULT '',
+                generation_duration REAL DEFAULT 0,
+                token_usage TEXT DEFAULT '{}',
+                agent_round INTEGER DEFAULT 0,
+                UNIQUE(round_id, problem_id, model_uuid)
+            )
+        """)
+        await db.execute(f"INSERT INTO submissions_new ({cols_str}) SELECT {cols_str} FROM submissions")
+        await db.execute("DROP TABLE submissions")
+        await db.execute("ALTER TABLE submissions_new RENAME TO submissions")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_submissions_round ON submissions(round_id)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_submissions_model ON submissions(model_uuid)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_submissions_problem_status ON submissions(problem_id, status)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_submissions_model_status ON submissions(model_uuid, status)")
 
     # 迁移：扩展 models 表
     cursor = await db.execute("PRAGMA table_info(models)")
