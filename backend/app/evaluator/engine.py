@@ -243,9 +243,14 @@ async def run_eval_in_sandbox(
         for filename, content in code_files.items():
             (sandbox / filename).write_text(content)
 
-        # 复制题目测试文件（test.c、test_framework.h、solution.h 等）
+        # 复制题目测试文件（test.c、solution.h 等）
         for f in problem_dir.iterdir():
             if f.name not in code_files and f.is_file():
+                (sandbox / f.name).write_text(f.read_text())
+
+        # 复制 problems/ 根目录的共享文件（如 test_framework.h）
+        for f in problem_dir.parent.iterdir():
+            if f.is_file() and f.name not in code_files and not (sandbox / f.name).exists():
                 (sandbox / f.name).write_text(f.read_text())
 
         # 读取 problem.json：编译参数、评分权重、并发标志

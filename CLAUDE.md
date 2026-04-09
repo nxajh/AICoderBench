@@ -144,10 +144,11 @@ Supported: GLM (智谱), Kimi (Moonshot), MiniMax, OpenRouter.
 
 ### Agent Tools Available to Models
 
-- `write_file(path, content)` — write code to file
+- `write_file(command, path, ...)` — create or edit files (`create` / `str_replace`)
+- `read_file(path, ...)` — read file contents (supports line range)
+- `list_files()` — list files in working directory
 - `compile()` — compile `solution.c`
-- `run_tests()` — run functional test suite
-- `run_tsan()` — run thread sanitizer
+- `run_tests()` — link `solution.o` + `test_self.c` and run
 - `submit()` — signal completion
 
 ## Frontend (`frontend/`)

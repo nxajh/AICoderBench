@@ -35,20 +35,37 @@ AGENT_TOOLS = [
         "type": "function",
         "function": {
             "name": "write_file",
-            "description": "将代码写入指定文件",
+            "description": (
+                "创建或编辑文件，通过 command 参数选择模式：\n"
+                "- create：创建新文件并写入完整内容（文件已存在则报错，请改用 str_replace）\n"
+                "- str_replace：在已有文件中精确替换指定内容（old_string 必须在文件中唯一存在）"
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
+                    "command": {
+                        "type": "string",
+                        "enum": ["create", "str_replace"],
+                        "description": "操作模式：create 创建新文件，str_replace 替换已有内容"
+                    },
                     "path": {
                         "type": "string",
                         "description": "文件路径，如 solution.c 或 test_self.c"
                     },
                     "content": {
                         "type": "string",
-                        "description": "文件完整内容"
+                        "description": "文件完整内容（create 模式必填）"
+                    },
+                    "old_string": {
+                        "type": "string",
+                        "description": "要被替换的原始内容，必须在文件中唯一存在（str_replace 模式必填）"
+                    },
+                    "new_string": {
+                        "type": "string",
+                        "description": "替换后的新内容（str_replace 模式必填）"
                     }
                 },
-                "required": ["path", "content"]
+                "required": ["command", "path"]
             }
         }
     },
@@ -56,7 +73,7 @@ AGENT_TOOLS = [
         "type": "function",
         "function": {
             "name": "compile",
-            "description": "编译 solution.c 为目标文件，返回编译结果（成功/错误/警告）。需要先 write_file 写入 solution.c。",
+            "description": "编译 solution.c 为目标文件，返回编译结果（成功/错误/警告）。需要先用 write_file 写入 solution.c。",
             "parameters": {
                 "type": "object",
                 "properties": {},
@@ -68,7 +85,7 @@ AGENT_TOOLS = [
         "type": "function",
         "function": {
             "name": "run_tests",
-            "description": "运行 test_self.c 编译出的程序，返回输出结果",
+            "description": "将 compile() 生成的 solution.o 与 test_self.c 链接并运行，返回测试输出。需要先调用 compile() 且已写入 test_self.c。",
             "parameters": {
                 "type": "object",
                 "properties": {},
@@ -80,13 +97,21 @@ AGENT_TOOLS = [
         "type": "function",
         "function": {
             "name": "read_file",
-            "description": "读取指定文件的内容",
+            "description": "读取指定文件的内容，支持通过 start_line / end_line 只读取部分行（行号从 1 开始）",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
                         "description": "文件路径，如 solution.c 或 test_self.c"
+                    },
+                    "start_line": {
+                        "type": "integer",
+                        "description": "起始行号（从 1 开始，不填则从第 1 行读取）"
+                    },
+                    "end_line": {
+                        "type": "integer",
+                        "description": "结束行号（包含该行，不填则读到文件末尾）"
                     }
                 },
                 "required": ["path"]
@@ -327,6 +352,9 @@ def _build_agent_prompt(problem: Problem, problem_dir: Path) -> str:
 - 线程相关：`<pthread.h>` `<unistd.h>`
 
 ## 接口定义
+
+工作目录已预置 `solution.h`（接口定义）和 `test_framework.h`（测试框架），无需自行创建。
+
 ```c
 {interface}
 ```
@@ -334,30 +362,35 @@ def _build_agent_prompt(problem: Problem, problem_dir: Path) -> str:
 ## 题目描述
 {description}
 
-## 工作流程
+## 工具说明
 
-你有以下工具可以使用：
-1. **write_file(path, content)** — 写入文件。你需要写两个文件：
-   - `solution.c` — 你的实现代码（包含 solution.h 中声明的函数）
-   - `test_self.c` — 你的自测代码（包含 main 函数，调用 solution.c 中的函数进行测试）
-2. **read_file(path)** — 读取已写入的文件内容
-3. **list_files()** — 列出工作目录下的所有文件及大小
-4. **compile()** — 编译 solution.c（语法检查 + 生成目标文件），返回编译结果
-5. **run_tests()** — 运行编译好的程序，返回输出
-6. **submit()** — 提交最终代码进行平台评分
+**write_file(command, path, ...)** — 创建或编辑文件，两种模式：
+- `create`：创建新文件，需提供 `content`（完整内容）。文件已存在时报错。
+- `str_replace`：精确替换已有文件中的内容，需提供 `old_string`（原内容，必须唯一）和 `new_string`（新内容）。
 
-**建议工作流程：**
-1. 先用 write_file 写 solution.c 和 test_self.c
-2. 调用 compile() 检查是否编译通过
-3. 如果编译失败，根据错误信息修改代码，重新编译
-4. 编译通过后，调用 run_tests() 运行自测
-5. 如果测试失败，根据输出修改代码，重新编译和测试
-6. 确认所有测试通过后，调用 submit() 提交
+**read_file(path, start_line?, end_line?)** — 读取文件内容，可通过 `start_line` / `end_line` 只读取指定行范围（行号从 1 开始）。
+
+**list_files()** — 列出工作目录下的所有文件及大小。
+
+**compile()** — 编译 `solution.c`，生成 `solution.o`，返回编译结果（成功/错误/警告）。
+
+**run_tests()** — 将 `solution.o` 与 `test_self.c` 链接并运行，返回测试输出。需先调用 `compile()` 且已写入 `test_self.c`。
+
+**submit()** — 提交最终代码进行平台评分。
+
+## 建议工作流程
+
+1. 用 `write_file(create)` 写 `solution.c`（实现接口）和 `test_self.c`（自测代码）
+2. 调用 `compile()` 检查编译
+3. 编译失败时，用 `write_file(str_replace)` 精确修复错误，重新编译
+4. 编译通过后，调用 `run_tests()` 运行自测
+5. 测试失败时，修改代码，重新编译和测试
+6. 所有测试通过后，调用 `submit()` 提交
 
 **注意：**
-- test_self.c 必须包含 `#include "solution.h"` 和 `main()` 函数
-- 自测代码应该覆盖边界情况
-- 确保编译通过且自测全部通过后再提交
+- `solution.c` 需实现 `solution.h` 中声明的所有函数
+- `test_self.c` 需包含 `#include "solution.h"` 和 `main()` 函数，自测应覆盖边界情况
+- 修改代码时优先使用 `str_replace` 精确替换，避免重写整个文件
 - 你最多可以进行 {MAX_ROUNDS} 轮交互，总时间限制 2 小时
 """
 
@@ -389,6 +422,14 @@ async def run_agent(
 
     # 临时目录存放当前轮次的代码
     sandbox = Path(tempfile.mkdtemp(prefix="agent_"))
+
+    # 预置题目头文件：solution.h 是接口契约，test_framework.h 是测试框架
+    for fname in ("solution.h", "test_framework.h"):
+        src = problem_dir / fname
+        if not src.exists():
+            src = problem_dir.parent / fname
+        if src.exists():
+            (sandbox / fname).write_text(src.read_text())
 
     # Token 累计
     total_prompt_tokens = 0
@@ -554,21 +595,49 @@ async def run_agent(
                 tc_record = {"tool": fn_name}
 
                 if fn_name == "write_file":
+                    command = fn_args.get("command", "")
                     fpath = fn_args.get("path", "")
-                    fcontent = fn_args.get("content", "")
-                    if not fpath or fcontent is None:
-                        tool_result = "Error: path and content are required"
+                    if not command or not fpath:
+                        tool_result = "Error: command and path are required"
                     else:
                         safe = _safe_path(sandbox, fpath)
                         if safe is None:
                             tool_result = "Error: path escapes sandbox directory"
+                        elif command == "create":
+                            if safe.exists():
+                                tool_result = f"Error: {fpath} already exists, use str_replace to modify it"
+                            else:
+                                content = fn_args.get("content", "")
+                                safe.parent.mkdir(parents=True, exist_ok=True)
+                                safe.write_text(content)
+                                result.files[fpath] = content
+                                tool_result = f"File {fpath} created ({len(content)} bytes, {len(content.splitlines())} lines)"
+                                tc_record["file"] = fpath
+                                tc_record["size"] = len(content)
+                        elif command == "str_replace":
+                            if not safe.exists():
+                                tool_result = f"Error: {fpath} not found, use create to create it first"
+                            else:
+                                old_string = fn_args.get("old_string", "")
+                                new_string = fn_args.get("new_string", "")
+                                if not old_string:
+                                    tool_result = "Error: old_string is required for str_replace"
+                                else:
+                                    current = safe.read_text()
+                                    count = current.count(old_string)
+                                    if count == 0:
+                                        tool_result = f"Error: old_string not found in {fpath}"
+                                    elif count > 1:
+                                        tool_result = f"Error: old_string found {count} times in {fpath}, must be unique. Include more surrounding context."
+                                    else:
+                                        new_content = current.replace(old_string, new_string, 1)
+                                        safe.write_text(new_content)
+                                        result.files[fpath] = new_content
+                                        tool_result = f"File {fpath} updated ({len(new_content)} bytes, {len(new_content.splitlines())} lines)"
+                                        tc_record["file"] = fpath
+                                        tc_record["size"] = len(new_content)
                         else:
-                            safe.parent.mkdir(parents=True, exist_ok=True)
-                            safe.write_text(fcontent)
-                            result.files[fpath] = fcontent
-                            tool_result = f"File {fpath} written ({len(fcontent)} bytes, {len(fcontent.splitlines())} lines)"
-                            tc_record["file"] = fpath
-                            tc_record["size"] = len(fcontent)
+                            tool_result = f"Error: unknown command '{command}', use 'create' or 'str_replace'"
 
                 elif fn_name == "read_file":
                     fpath = fn_args.get("path", "")
@@ -579,7 +648,17 @@ async def run_agent(
                         if safe is None:
                             tool_result = "Error: path escapes sandbox directory"
                         elif safe.exists():
-                            tool_result = safe.read_text()
+                            content = safe.read_text()
+                            start_line = fn_args.get("start_line")
+                            end_line = fn_args.get("end_line")
+                            if start_line is not None or end_line is not None:
+                                lines = content.splitlines(keepends=True)
+                                total = len(lines)
+                                s = max(0, (start_line - 1) if start_line else 0)
+                                e = min(total, end_line if end_line else total)
+                                tool_result = f"[Lines {s+1}-{e} of {total}]\n" + "".join(lines[s:e])
+                            else:
+                                tool_result = content
                         else:
                             tool_result = f"Error: file {fpath} not found"
                     tc_record["file"] = fpath
