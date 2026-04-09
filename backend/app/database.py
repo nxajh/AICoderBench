@@ -715,7 +715,6 @@ async def list_model_configs() -> list[dict]:
             d["api_key_masked"] = _mask_key(d.get("api_key", ""))
             d.pop("api_key", None)
             d.pop("name", None)
-            d.pop("provider_type", None)
             d["enabled"] = bool(d.get("enabled", 1))
             d["thinking"] = bool(d.get("thinking", 0))
             result.append(d)
@@ -755,16 +754,26 @@ async def get_model_by_provider_model(provider: str, model: str, thinking: bool)
         return d
 
 
+_PROVIDER_DEFAULT_DISPLAY = {
+    "glm": "GLM", "kimi": "Kimi", "minimax": "MiniMax",
+    "openrouter": "OpenRouter", "openai": "OpenAI",
+}
+
+
 async def create_model_config(
-    provider: str, model: str, api_key: str, base_url: str = "",
-    thinking: bool = False,
+    provider_type: str, model: str, api_key: str, base_url: str = "",
+    thinking: bool = False, display_name: str = "",
 ) -> dict:
-    """创建模型配置，自动生成 UUID"""
+    """创建模型配置，自动生成 UUID。
+    provider_type: 技术类型（决定用哪个 API 类）
+    display_name:  UI 显示名，留空则从 provider_type 推断
+    """
+    badge_name = display_name.strip() or _PROVIDER_DEFAULT_DISPLAY.get(provider_type, provider_type)
     new_uuid = str(uuid.uuid4())
     db = await get_db()
     await db.execute(
         "INSERT INTO models (uuid, provider, model, thinking, api_key, base_url, provider_type, enabled) VALUES (?, ?, ?, ?, ?, ?, ?, 1)",
-        (new_uuid, provider, model, int(thinking), api_key, base_url, provider)
+        (new_uuid, badge_name, model, int(thinking), api_key, base_url, provider_type)
     )
     await db.commit()
     return {"uuid": new_uuid}
