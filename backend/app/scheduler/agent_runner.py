@@ -428,7 +428,11 @@ async def run_agent(
                     )
                     break
                 except Exception as e:
-                    if attempt < 3 and "429" in str(e):
+                    err_str = str(e)
+                    is_429 = "429" in err_str
+                    is_5xx = any(f"'{c}" in err_str or f'"{c}' in err_str
+                                 for c in ("500", "501", "502", "503", "504"))
+                    if is_429 and attempt < 3:
                         wait = (attempt + 1) * 15
                         # 若等待后会超时，放弃重试
                         if time.time() - start_time + wait >= total_timeout:
@@ -437,6 +441,11 @@ async def run_agent(
                             resp = None
                             break
                         logger.warning(f"[agent] 429 rate limit, retrying in {wait}s (attempt {attempt+1}/3)")
+                        await asyncio.sleep(wait)
+                        continue
+                    elif is_5xx and attempt < 2:
+                        wait = 10
+                        logger.warning(f"[agent] 5xx server error, retrying in {wait}s (attempt {attempt+1}/2): {e}")
                         await asyncio.sleep(wait)
                         continue
                     logger.error(f"[agent] LLM call failed at round {round_num}: {e}")
