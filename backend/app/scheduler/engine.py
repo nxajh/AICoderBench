@@ -21,6 +21,7 @@ from datetime import datetime
 from pathlib import Path
 from dataclasses import dataclass, field, asdict
 from typing import Optional
+from urllib.parse import urlparse
 
 from ..providers.model_provider import ModelProvider
 from ..evaluator.engine import run_eval_in_sandbox, compute_scores, EvalResult
@@ -109,10 +110,10 @@ async def run_benchmark(
         task.sub_id = await db.create_submission(round_id, task.problem_uuid, task.model_uuid)
 
     n_models = len({t.model_uuid for t in gen_tasks})
-    n_providers = len({t.provider.provider_id for t in gen_tasks})
+    n_hosts = len({urlparse(t.provider.base_url).hostname for t in gen_tasks})
     logger.info(
         f"Round {round_id}: {len(gen_tasks)} tasks, "
-        f"{n_models} models / {n_providers} providers (providers parallel), "
+        f"{n_models} models / {n_hosts} API hosts (hosts parallel), "
         f"eval_concurrency={SANDBOX_CONCURRENCY}"
     )
 
@@ -137,17 +138,23 @@ async def run_benchmark(
         t = asyncio.create_task(_run_eval_with_sem(eval_task, eval_sem))
         spawned_evals.append(t)
 
-    # 同一 provider 的任务串行（避免触发 provider 级限速），不同 provider 并行
-    by_provider: dict[str, list[GenTask]] = {}
+    # 同一 API 域名的任务串行（避免触发 provider 级限速），不同域名并行。
+    # 用 base_url hostname 而非 provider_id 做 key，这样同类型但不同域名的模型
+    # （如两个 OpenAI-compatible 分别指向 DeepSeek 和 Qwen）仍可并行。
+    def _rate_limit_key(task: GenTask) -> str:
+        host = urlparse(task.provider.base_url).hostname or task.provider.base_url
+        return host
+
+    by_host: dict[str, list[GenTask]] = {}
     for task in gen_tasks:
-        by_provider.setdefault(task.provider.provider_id, []).append(task)
+        by_host.setdefault(_rate_limit_key(task), []).append(task)
 
     async def _run_provider_group(tasks: list[GenTask]):
         for task in tasks:
             await _gen_then_eval(task)
 
     await asyncio.gather(
-        *[_run_provider_group(tasks) for tasks in by_provider.values()]
+        *[_run_provider_group(tasks) for tasks in by_host.values()]
     )
 
     # 等待所有已派发的评测任务完成
