@@ -16,6 +16,7 @@ from ..providers.model_provider import ModelProvider
 from ..evaluator.engine import run_eval_in_sandbox, compute_scores, EvalResult
 from ..models.problem import Problem, _find_problem_dir
 from ..utils import clean_thinking as _clean_thinking
+from ..config import AGENT_MAX_TOKENS
 
 logger = logging.getLogger(__name__)
 
@@ -373,6 +374,7 @@ async def run_agent(
     total_reasoning_tokens = 0
 
     submitted = False
+    no_tool_call_streak = 0
 
     try:
         for round_num in range(1, MAX_ROUNDS + 1):
@@ -393,7 +395,7 @@ async def run_agent(
                         messages,
                         tools=AGENT_TOOLS,
                         temperature=0,
-                        max_tokens=131072,
+                        max_tokens=AGENT_MAX_TOKENS,
                     )
                     break
                 except Exception as e:
@@ -431,7 +433,11 @@ async def run_agent(
             # 滑动窗口：保留第一条（系统提示）+ 最近 MAX_CONTEXT_MESSAGES 条，防止超出上下文
             MAX_CONTEXT_MESSAGES = 60
             if len(messages) > MAX_CONTEXT_MESSAGES + 1:
-                messages = [messages[0]] + messages[-(MAX_CONTEXT_MESSAGES):]
+                tail = messages[-(MAX_CONTEXT_MESSAGES):]
+                # 跳过开头的 tool result 消息（没有对应的 tool_call 会导致 API 报错）
+                while tail and tail[0].get("role") == "tool":
+                    tail = tail[1:]
+                messages = [messages[0]] + tail
 
             # 分离思考内容和输出
             thinking_content = ""
@@ -462,13 +468,19 @@ async def run_agent(
 
             # 如果没有 tool calls，检查是否有纯文本代码输出
             if not tool_calls:
+                no_tool_call_streak += 1
                 # 模型可能直接输出了文本而没有调用工具
                 # 检查是否包含代码
                 if text_content:
-                    round_record["note"] = "No tool calls, text only"
+                    round_record["note"] = f"No tool calls, text only (streak={no_tool_call_streak})"
                 else:
-                    round_record["note"] = "No tool calls, empty response"
+                    round_record["note"] = f"No tool calls, empty response (streak={no_tool_call_streak})"
                 result.history.append(round_record)
+
+                if no_tool_call_streak >= 3:
+                    result.error = "Model failed to use tools for 3 consecutive rounds"
+                    result.finish_reason = "error"
+                    break
 
                 # 如果连续没有 tool call，可能是模型不知道该干什么了
                 # 再给一个提示
@@ -477,6 +489,8 @@ async def run_agent(
                     "content": "请使用 write_file 工具写入代码文件，然后调用 compile() 编译。如果你认为代码已经完美，请调用 submit() 提交。"
                 })
                 continue
+
+            no_tool_call_streak = 0
 
             # 处理每个 tool call
             logger.info(f"[agent] Round {round_num}: processing {len(tool_calls)} tool calls")
@@ -579,10 +593,7 @@ async def run_agent(
     finally:
         # 清理临时目录
         import shutil
-        try:
-            shutil.rmtree(sandbox, ignore_errors=True)
-        except:
-            pass
+        shutil.rmtree(sandbox, ignore_errors=True)
 
     result.total_time = round(time.time() - start_time, 1)
     result.submitted = submitted

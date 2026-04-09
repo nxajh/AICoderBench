@@ -206,27 +206,73 @@ export default function SubmissionPage() {
         {ev && (
           <section className="mb-8">
             <h2 className="text-lg font-semibold mb-3">🔍 评测结果</h2>
-            <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 space-y-3">
+            <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 space-y-4">
+              {/* 状态徽章 */}
               <div className="flex flex-wrap gap-3">
                 <Badge ok={ev.compile_success} label="编译" />
+                <Badge ok={ev.compile_tsan_success} label="TSan编译" />
+                <Badge ok={ev.compile_asan_success} label="ASan编译" />
                 <Badge ok={ev.tsan_issues === 0} label="TSan" />
                 <Badge ok={ev.asan_issues === 0} label="ASan" />
+                <Badge ok={ev.valgrind_leaks === 0} label="Valgrind" />
+                {ev.timed_out && (
+                  <span className="text-xs px-2 py-1 rounded bg-yellow-800/50 text-yellow-300">超时</span>
+                )}
               </div>
-              <div className="text-sm text-gray-400 space-y-1">
-                <p>编译警告: <span className="text-white font-mono">{ev.compile_warnings}</span></p>
-                <p>测试通过: <span className="text-white font-mono">{ev.tests_passed}/{ev.tests_total}</span></p>
-                <p>TSan issues: <span className="text-white font-mono">{ev.tsan_issues}</span></p>
-                <p>ASan issues: <span className="text-white font-mono">{ev.asan_issues}</span></p>
-                <p>代码行数: <span className="text-white font-mono">{ev.total_loc}</span></p>
-                <p>最大圈复杂度: <span className="text-white font-mono">{ev.max_cyclomatic}</span></p>
-                {sub.token_usage && (
-                  <p>Token 用量: <span className="text-white font-mono">
-                    {sub.token_usage.prompt_tokens} / {sub.token_usage.completion_tokens} / {sub.token_usage.total_tokens}
-                  </span> <span className="text-gray-500">(prompt / completion / total)</span></p>
-                )}
-                {sub.generation_duration != null && (
-                  <p>生成耗时: <span className="text-white font-mono">{sub.generation_duration.toFixed(1)}s</span></p>
-                )}
+
+              {/* 编译 & 测试 */}
+              <div>
+                <p className="text-xs text-gray-500 uppercase mb-1">编译 &amp; 测试</p>
+                <div className="text-sm text-gray-400 space-y-1">
+                  <p>编译警告: <span className="text-white font-mono">{ev.compile_warnings}</span></p>
+                  <p>测试通过: <span className="text-white font-mono">{ev.tests_passed}/{ev.tests_total}</span></p>
+                  {ev.exec_time_ms > 0 && (
+                    <p>执行耗时: <span className="text-white font-mono">{ev.exec_time_ms} ms</span></p>
+                  )}
+                </div>
+              </div>
+
+              {/* 安全性 */}
+              <div>
+                <p className="text-xs text-gray-500 uppercase mb-1">安全性</p>
+                <div className="text-sm text-gray-400 space-y-1">
+                  <p>TSan issues: <span className={`font-mono ${ev.tsan_issues > 0 ? "text-red-400" : "text-white"}`}>{ev.tsan_issues}</span></p>
+                  <p>ASan issues: <span className={`font-mono ${ev.asan_issues > 0 ? "text-red-400" : "text-white"}`}>{ev.asan_issues}</span></p>
+                  <p>Valgrind 泄漏块: <span className={`font-mono ${ev.valgrind_leaks > 0 ? "text-red-400" : "text-white"}`}>{ev.valgrind_leaks}</span></p>
+                  <p>Helgrind issues: <span className={`font-mono ${ev.helgrind_issues > 0 ? "text-red-400" : "text-white"}`}>{ev.helgrind_issues}</span></p>
+                  <p>危险 API 调用: <span className={`font-mono ${ev.dangerous_apis > 0 ? "text-yellow-400" : "text-white"}`}>{ev.dangerous_apis}</span></p>
+                </div>
+              </div>
+
+              {/* 代码质量 */}
+              <div>
+                <p className="text-xs text-gray-500 uppercase mb-1">代码质量</p>
+                <div className="text-sm text-gray-400 space-y-1">
+                  <p>clang-tidy 错误/警告: <span className={`font-mono ${ev.clang_tidy_errors > 0 ? "text-red-400" : "text-white"}`}>{ev.clang_tidy_errors}</span> / <span className={`font-mono ${ev.clang_tidy_warnings > 0 ? "text-yellow-400" : "text-white"}`}>{ev.clang_tidy_warnings}</span></p>
+                  <p>最大圈复杂度: <span className={`font-mono ${ev.max_cyclomatic > 20 ? "text-yellow-400" : "text-white"}`}>{ev.max_cyclomatic}</span></p>
+                  <p>平均圈复杂度: <span className={`font-mono ${ev.avg_cyclomatic > 8 ? "text-yellow-400" : "text-white"}`}>{ev.avg_cyclomatic?.toFixed(1)}</span></p>
+                  <p>最大函数行数: <span className={`font-mono ${ev.max_func_length > 80 ? "text-yellow-400" : "text-white"}`}>{ev.max_func_length}</span></p>
+                  <p>代码行数: <span className="text-white font-mono">{ev.total_loc}</span></p>
+                  <p>注释率: <span className={`font-mono ${ev.comment_ratio < 0.05 && ev.total_loc > 30 ? "text-yellow-400" : "text-white"}`}>{ev.comment_ratio != null ? (ev.comment_ratio * 100).toFixed(1) + "%" : "-"}</span></p>
+                </div>
+              </div>
+
+              {/* 生成信息 */}
+              <div>
+                <p className="text-xs text-gray-500 uppercase mb-1">生成信息</p>
+                <div className="text-sm text-gray-400 space-y-1">
+                  {sub.token_usage && (
+                    <p>Token 用量: <span className="text-white font-mono">
+                      {sub.token_usage.prompt_tokens} / {sub.token_usage.completion_tokens} / {sub.token_usage.total_tokens}
+                    </span> <span className="text-gray-500">(prompt / completion / total)</span></p>
+                  )}
+                  {sub.generation_duration != null && (
+                    <p>生成耗时: <span className="text-white font-mono">{sub.generation_duration.toFixed(1)}s</span></p>
+                  )}
+                  {ev.error && (
+                    <p>错误: <span className="text-red-400 font-mono text-xs">{ev.error}</span></p>
+                  )}
+                </div>
               </div>
             </div>
           </section>

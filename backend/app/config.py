@@ -26,6 +26,7 @@ SANDBOX_CONCURRENCY = int(os.getenv("SANDBOX_CONCURRENCY", "1"))
 MODEL_TIMEOUT = 60  # 秒
 MODEL_TEMPERATURE = 0
 MODEL_MAX_TOKENS = 8192
+AGENT_MAX_TOKENS = 131072  # agent 轮次生成上限（含 thinking/reasoning）
 MAX_RETRIES = 3
 
 # 编译

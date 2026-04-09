@@ -320,5 +320,4 @@ async def run_eval_in_sandbox(
             result.error = "result.json not found after container run"
             logger.error(result.error)
 
-    compute_scores(result, scoring, token_usage=None, concurrent=concurrent)
     return result

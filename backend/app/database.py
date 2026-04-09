@@ -22,7 +22,7 @@ VALID_SUBMISSION_COLUMNS = {
     "status", "generated_code", "raw_output", "used_tool_call",
     "generation_error", "eval_result", "total_score", "score_breakdown",
     "created_at", "finished_at", "generation_duration", "token_usage",
-    "model_uuid", "model_id", "prompt",
+    "model_uuid", "prompt",
 }
 
 VALID_MODEL_COLUMNS = {
@@ -109,6 +109,11 @@ async def init_db():
         CREATE INDEX IF NOT EXISTS idx_submissions_problem_status ON submissions(problem_id, status);
         CREATE INDEX IF NOT EXISTS idx_submissions_model_status ON submissions(model_uuid, status);
     """)
+
+    # 启用 WAL 模式提升并发写入安全性
+    await db.execute("PRAGMA journal_mode=WAL")
+    await db.execute("PRAGMA busy_timeout=5000")
+    await db.commit()
 
     # 迁移：添加 generation_duration 字段（如果不存在）
     cursor = await db.execute("PRAGMA table_info(submissions)")

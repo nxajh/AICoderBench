@@ -331,6 +331,14 @@ async def _run_evaluation_phase(
             "performance": eval_result.score_performance,
         }
 
+        expected_total = sum(score_breakdown.values())
+        if expected_total != eval_result.score_total:
+            logger.warning(
+                f"[{task.model_uuid}] {task.problem.id}: "
+                f"score_breakdown sum ({expected_total}) != score_total ({eval_result.score_total}), correcting"
+            )
+            eval_result.score_total = expected_total
+
         final_status = "done" if not eval_result.error else "failed"
         await db.update_submission(
             task.sub_id,
