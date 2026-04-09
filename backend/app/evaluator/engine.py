@@ -17,6 +17,16 @@ from ..config import DOCKER_IMAGE
 
 logger = logging.getLogger(__name__)
 
+# Docker 客户端单例（避免每次 eval 新建连接耗尽文件描述符）
+_docker_client = None
+
+
+def _get_docker_client():
+    global _docker_client
+    if _docker_client is None:
+        _docker_client = docker_module.from_env()
+    return _docker_client
+
 
 @dataclass
 class EvalResult:
@@ -242,7 +252,7 @@ async def run_eval_in_sandbox(
 
         container = None
         try:
-            client = docker_module.from_env()
+            client = _get_docker_client()
             container = await loop.run_in_executor(None, lambda: client.containers.create(
                 image=DOCKER_IMAGE,
                 command=[
@@ -307,11 +317,29 @@ async def run_eval_in_sandbox(
         # 读取结果文件（容器写入 /sandbox/result.json = tmpdir/result.json）
         result_file = sandbox / "result.json"
         if result_file.exists():
-            data = json.loads(result_file.read_text())
+            try:
+                data = json.loads(result_file.read_text())
+            except json.JSONDecodeError as e:
+                result.error = f"result.json parse error: {e}"
+                logger.error(result.error)
+                data = {}
             logger.info(f"Result keys: {list(data.keys())}")
             for key, value in data.items():
                 if hasattr(result, key):
                     setattr(result, key, value)
+            # 字段完整性检查
+            if not isinstance(result.compile_success, bool):
+                logger.warning(f"compile_success is not bool: {result.compile_success!r}, defaulting False")
+                result.compile_success = False
+            if result.tests_total < 0:
+                result.tests_total = 0
+            if result.tests_passed < 0:
+                result.tests_passed = 0
+            if result.tests_passed > result.tests_total:
+                logger.warning(
+                    f"tests_passed ({result.tests_passed}) > tests_total ({result.tests_total}), clamping"
+                )
+                result.tests_passed = result.tests_total
             logger.info(
                 f"compile={result.compile_success} "
                 f"tests={result.tests_passed}/{result.tests_total}"

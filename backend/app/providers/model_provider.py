@@ -106,7 +106,11 @@ class ModelProvider(ABC):
                 raw = json.dumps(resp, ensure_ascii=False)
                 return GenerationResult(files=files, raw_output=raw, used_tool_call=True, token_usage=usage)
         except Exception as e:
-            logger.warning(f"[{self.provider_id}] tool calling failed: {type(e).__name__}: {repr(e)}")
+            # 脱敏：从错误信息中移除 API key
+            safe_msg = repr(e)
+            if self.api_key:
+                safe_msg = safe_msg.replace(self.api_key, "***")
+            logger.warning(f"[{self.provider_id}] tool calling failed: {type(e).__name__}: {safe_msg}")
 
         # 兜底：纯文本生成 + 正则提取
         resp = await self._chat(messages, temperature=0, max_tokens=65536)
@@ -331,7 +335,8 @@ async def create_providers_from_db() -> dict[str, ModelProvider]:
                 kwargs["thinking"] = full.get("thinking", False)
             providers[cfg["uuid"]] = cls(**kwargs)
         except Exception as e:
-            logger.warning(f"Failed to create provider uuid={cfg['uuid']}: {e}")
+            # 只记录异常类型，不记录异常消息（可能含 api_key）
+            logger.warning(f"Failed to create provider uuid={cfg['uuid']}: {type(e).__name__}")
     return providers
 
 

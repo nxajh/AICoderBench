@@ -261,11 +261,31 @@ async def _do_run_tests(sandbox_dir: Path, compile_flags: str = "") -> dict:
         return {"success": False, "output": str(e)}
 
 
+_TOOL_RESULT_MAX_LEN = 8192  # tool result 最大长度（字节），超出截断
+
+
+def _truncate_tool_result(text: str) -> str:
+    if len(text) <= _TOOL_RESULT_MAX_LEN:
+        return text
+    kept = _TOOL_RESULT_MAX_LEN
+    return text[:kept] + f"\n... [output truncated, {len(text) - kept} chars omitted]"
+
+
 def _safe_path(sandbox: Path, fpath: str) -> Optional[Path]:
-    """确保文件路径在 sandbox 目录内，防止路径穿越"""
-    resolved = (sandbox / fpath).resolve()
-    if not str(resolved).startswith(str(sandbox.resolve())):
+    """确保文件路径在 sandbox 目录内，防止路径穿越和符号链接穿越"""
+    sandbox_real = sandbox.resolve()
+    target = sandbox / fpath
+    try:
+        resolved = target.resolve()
+        resolved.relative_to(sandbox_real)  # 路径必须在 sandbox 内
+    except (ValueError, OSError):
         return None
+    # 若目标已存在且是符号链接，验证其最终指向仍在 sandbox 内
+    if target.exists() and target.is_symlink():
+        try:
+            target.resolve().relative_to(sandbox_real)
+        except ValueError:
+            return None
     return resolved
 
 
@@ -401,6 +421,12 @@ async def run_agent(
                 except Exception as e:
                     if attempt < 3 and "429" in str(e):
                         wait = (attempt + 1) * 15
+                        # 若等待后会超时，放弃重试
+                        if time.time() - start_time + wait >= total_timeout:
+                            logger.warning(f"[agent] 429 backoff would exceed total_timeout, aborting")
+                            result.finish_reason = "timeout"
+                            resp = None
+                            break
                         logger.warning(f"[agent] 429 rate limit, retrying in {wait}s (attempt {attempt+1}/3)")
                         await asyncio.sleep(wait)
                         continue
@@ -565,11 +591,11 @@ async def run_agent(
                 else:
                     tool_result = f"Unknown tool: {fn_name}"
 
-                # 把 tool result 加入 messages
+                # 把 tool result 加入 messages（截断防止超出上下文）
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tc_id,
-                    "content": tool_result,
+                    "content": _truncate_tool_result(tool_result),
                 })
                 round_record["tool_calls"].append(tc_record)
 

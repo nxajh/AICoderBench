@@ -2,6 +2,7 @@
 SQLite 数据库层
 """
 import json
+import logging
 import aiosqlite
 import uuid
 from pathlib import Path
@@ -192,8 +193,8 @@ async def init_db():
 
     await db.commit()
 
-    # Seed：从文件系统同步题目到数据库
-    await _seed_problems()
+    # 首次同步：从文件系统载入题目（startup 时再做全量 upsert）
+    await sync_problems_from_disk()
 
 
 # ---- Round 操作 ----
@@ -805,40 +806,66 @@ def _mask_key(key: str) -> str:
 
 # ---- Problem 操作 ----
 
-async def _seed_problems():
-    """从文件系统同步题目到数据库"""
+async def sync_problems_from_disk():
+    """从文件系统全量同步题目到数据库（文件是权威来源）。
+    - 新题：分配 uuid 并插入
+    - 已有题：更新所有字段（保留 uuid 以维持 submissions 外键）
+    - 孤立 DB 条目（文件已删除）：保留，不删除（保护历史提交记录）
+    """
     from .config import PROBLEMS_DIR
     if not PROBLEMS_DIR.exists():
         return
+    _logger = logging.getLogger(__name__)
     db = await get_db()
+    synced = 0
     for d in sorted(PROBLEMS_DIR.iterdir()):
         json_path = d / "problem.json"
         if not d.is_dir() or not json_path.exists():
             continue
-        meta = json.loads(json_path.read_text())
+        try:
+            meta = json.loads(json_path.read_text())
+        except (json.JSONDecodeError, OSError) as e:
+            _logger.warning(f"sync_problems_from_disk: skipping {d.name}: {e}")
+            continue
         slug = d.name
-        # 检查是否已存在（按 slug 查找）
+        problem_id = meta.get("id", slug)
+        scoring = meta.get("scoring", {})
+        # 验证权重之和
+        if scoring:
+            total_weight = sum(v for v in scoring.values() if isinstance(v, (int, float)))
+            if total_weight != 100:
+                _logger.warning(f"Problem {slug}: scoring weights sum to {total_weight}, expected 100")
         existing = await db.execute_fetchall("SELECT uuid FROM problems WHERE slug=?", (slug,))
         if existing:
-            continue
-        # 新题，插入
-        new_uuid = f"p-{uuid.uuid4().hex[:12]}"
-        scoring = meta.get("scoring", {})
-        # id 存储 problem.json 中定义的原始 ID（如 "06-memory-pool"），而非 uuid
-        problem_id = meta.get("id", slug)
-        await db.execute(
-            """INSERT OR IGNORE INTO problems
-            (uuid, slug, id, title, difficulty, language, tags, compile_flags,
-             timeout_seconds, scoring, has_benchmark, concurrent, perf_baseline_ms)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (new_uuid, slug, problem_id, meta.get("title", slug),
-             meta.get("difficulty", "medium"), meta.get("language", "c"),
-             json.dumps(meta.get("tags", [])), meta.get("compile_flags", ""),
-             meta.get("timeout_seconds", 30), json.dumps(scoring),
-             int(meta.get("has_benchmark", False)), int(meta.get("concurrent", True)),
-             meta.get("perf_baseline_ms", 100))
-        )
+            # 更新已有记录（保留 uuid）
+            await db.execute(
+                """UPDATE problems SET id=?, title=?, difficulty=?, language=?, tags=?,
+                   compile_flags=?, timeout_seconds=?, scoring=?, has_benchmark=?,
+                   concurrent=?, perf_baseline_ms=? WHERE slug=?""",
+                (problem_id, meta.get("title", slug),
+                 meta.get("difficulty", "medium"), meta.get("language", "c"),
+                 json.dumps(meta.get("tags", [])), meta.get("compile_flags", ""),
+                 meta.get("timeout_seconds", 30), json.dumps(scoring),
+                 int(meta.get("has_benchmark", False)), int(meta.get("concurrent", True)),
+                 meta.get("perf_baseline_ms", 0), slug)
+            )
+        else:
+            new_uuid = f"p-{uuid.uuid4().hex[:12]}"
+            await db.execute(
+                """INSERT INTO problems
+                (uuid, slug, id, title, difficulty, language, tags, compile_flags,
+                 timeout_seconds, scoring, has_benchmark, concurrent, perf_baseline_ms)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (new_uuid, slug, problem_id, meta.get("title", slug),
+                 meta.get("difficulty", "medium"), meta.get("language", "c"),
+                 json.dumps(meta.get("tags", [])), meta.get("compile_flags", ""),
+                 meta.get("timeout_seconds", 30), json.dumps(scoring),
+                 int(meta.get("has_benchmark", False)), int(meta.get("concurrent", True)),
+                 meta.get("perf_baseline_ms", 0))
+            )
+        synced += 1
     await db.commit()
+    _logger.info(f"sync_problems_from_disk: synced {synced} problems")
 
 
 async def list_problems_db() -> list[dict]:

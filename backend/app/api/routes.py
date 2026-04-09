@@ -1,7 +1,6 @@
 """
 AICoderBench API 路由
 """
-import json
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 from typing import Optional
 from pydantic import BaseModel
@@ -136,6 +135,10 @@ async def create_problem_api(req: CreateProblemRequest):
         raise HTTPException(400, "ID 只能包含字母、数字、下划线和连字符")
     if not req.title.strip():
         raise HTTPException(400, "标题不能为空")
+    if req.scoring:
+        weight_total = sum(v for v in req.scoring.values() if isinstance(v, (int, float)))
+        if weight_total != 100:
+            raise HTTPException(400, f"scoring 权重之和须为 100，当前为 {weight_total}")
     try:
         prob = create_problem(
             id=req.id,
@@ -149,8 +152,8 @@ async def create_problem_api(req: CreateProblemRequest):
             description=req.description,
             interface_h=req.interface_h,
         )
-        # 重新 seed 让数据库同步
-        await db._seed_problems()
+        # 文件已写入，同步到数据库（权威来源是文件）
+        await db.sync_problems_from_disk()
         # 返回带 uuid 的版本
         p = await db.get_problem_by_slug(req.id)
         return p if p else prob.model_dump()
@@ -160,8 +163,11 @@ async def create_problem_api(req: CreateProblemRequest):
 
 @router.put("/problems/{problem_id}")
 async def update_problem_api(problem_id: str, req: UpdateProblemRequest):
-    """更新题目"""
-    # 查找 slug
+    """更新题目（文件是权威来源，写文件后同步数据库）"""
+    if req.scoring is not None:
+        weight_total = sum(v for v in req.scoring.values() if isinstance(v, (int, float)))
+        if weight_total != 100:
+            raise HTTPException(400, f"scoring 权重之和须为 100，当前为 {weight_total}")
     slug = problem_id
     p = await db.get_problem_by_uuid(problem_id)
     if p:
@@ -171,16 +177,13 @@ async def update_problem_api(problem_id: str, req: UpdateProblemRequest):
             problem_id=slug,
             **{k: v for k, v in req.model_dump().items() if v is not None},
         )
-        # 同步数据库
-        upd = {k: v for k, v in req.model_dump().items() if v is not None}
-        if upd:
-            conn = await db.get_db()
-            sets = ", ".join(f"{k}=?" for k in upd if k in ("title", "difficulty", "tags", "compile_flags", "timeout_seconds", "scoring"))
-            vals = [json.dumps(v) if isinstance(v, (dict, list)) else v for k, v in upd.items() if k in ("title", "difficulty", "tags", "compile_flags", "timeout_seconds", "scoring")]
-            if sets:
-                await conn.execute(f"UPDATE problems SET {sets} WHERE slug=?", vals + [slug])
-                await conn.commit()
-        return updated
+        # 文件已更新，全量同步到数据库
+        await db.sync_problems_from_disk()
+        # 返回带 uuid 的版本
+        fresh = await db.get_problem_by_slug(slug)
+        if fresh:
+            return {**fresh, "description": updated.description, "interface_h": updated.interface_h}
+        return updated.model_dump()
     except FileNotFoundError:
         raise HTTPException(404, f"Problem '{problem_id}' not found")
 
