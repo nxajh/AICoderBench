@@ -23,24 +23,37 @@ interface EditForm {
 }
 
 const PROVIDER_TYPES = [
-  { value: "glm", label: "GLM (智谱)" },
-  { value: "kimi", label: "Kimi (月之暗面)" },
-  { value: "minimax", label: "MiniMax" },
+  { value: "glm",        label: "GLM (智谱)" },
+  { value: "kimi",       label: "Kimi (月之暗面)" },
+  { value: "minimax",    label: "MiniMax" },
   { value: "openrouter", label: "OpenRouter" },
+  { value: "openai",     label: "OpenAI Compatible（通用）" },
 ];
 
 const DEFAULT_BASE_URLS: Record<string, string> = {
-  glm: "https://open.bigmodel.cn/api/coding/paas/v4",
-  kimi: "https://api.moonshot.cn/v1",
-  minimax: "https://api.minimaxi.com/v1",
+  glm:        "https://open.bigmodel.cn/api/coding/paas/v4",
+  kimi:       "https://api.moonshot.cn/v1",
+  minimax:    "https://api.minimaxi.com/v1",
   openrouter: "https://openrouter.ai/api/v1",
+  // openai 类型不预填，由用户自行输入；常见预设见占位符
 };
 
+// 常见 OpenAI-compatible provider 的 base URL 提示
+const OPENAI_COMPAT_PRESETS = [
+  { label: "DeepSeek",       url: "https://api.deepseek.com/v1" },
+  { label: "Qwen (阿里云)",  url: "https://dashscope.aliyuncs.com/compatible-mode/v1" },
+  { label: "Doubao (火山)",  url: "https://ark.cn-beijing.volces.com/api/v3" },
+  { label: "Groq",           url: "https://api.groq.com/openai/v1" },
+  { label: "Together AI",    url: "https://api.together.xyz/v1" },
+  { label: "OpenAI",         url: "https://api.openai.com/v1" },
+];
+
 const PROVIDER_DISPLAY: Record<string, string> = {
-  glm: "GLM",
-  kimi: "Kimi",
-  minimax: "MiniMax",
+  glm:        "GLM",
+  kimi:       "Kimi",
+  minimax:    "MiniMax",
   openrouter: "OpenRouter",
+  openai:     "OpenAI",
 };
 
 export default function ModelsPage() {
@@ -215,8 +228,21 @@ export default function ModelsPage() {
               </div>
               <div>
                 <label className="block text-xs text-gray-400 mb-1">Base URL</label>
+                {form.provider === "openai" && (
+                  <select
+                    className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-sm mb-1 text-gray-400"
+                    value=""
+                    onChange={e => { if (e.target.value) setForm(f => ({ ...f, base_url: e.target.value })); }}
+                  >
+                    <option value="">— 选择常见预设 —</option>
+                    {OPENAI_COMPAT_PRESETS.map(p => (
+                      <option key={p.url} value={p.url}>{p.label}: {p.url}</option>
+                    ))}
+                  </select>
+                )}
                 <input value={form.base_url} onChange={e => setForm(f => ({ ...f, base_url: e.target.value }))}
-                  className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-sm" />
+                  className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-sm"
+                  placeholder={form.provider === "openai" ? "https://api.example.com/v1" : ""} />
               </div>
               {form.provider === "glm" && (
                 <div className="flex items-center gap-2">

@@ -292,12 +292,40 @@ class MiniMaxProvider(ModelProvider):
         resp.raise_for_status()
         return resp.json()
 
+class OpenAIProvider(ModelProvider):
+    """通用 OpenAI-compatible provider，适用于 DeepSeek、Qwen、Doubao 等标准接口。"""
+    provider_id = "openai"
+
+    async def _chat(self, messages, tools=None, temperature=0, max_tokens=65536):
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        body = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        if tools:
+            body["tools"] = tools
+        client = await self._get_client()
+        resp = await client.post(
+            f"{self.base_url}/chat/completions",
+            headers=headers,
+            json=body,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+
 # Provider 类型映射
 PROVIDER_CLASS_MAP = {
     "glm": GLMProvider,
     "kimi": KimiProvider,
     "minimax": MiniMaxProvider,
     "openrouter": OpenRouterProvider,
+    "openai": OpenAIProvider,
 }
 
 
@@ -325,7 +353,7 @@ async def create_providers_from_db() -> dict[str, ModelProvider]:
             logger.warning(f"Skipping model uuid={cfg['uuid']}: no base_url configured")
             continue
 
-        cls = PROVIDER_CLASS_MAP.get(ptype)
+        cls = PROVIDER_CLASS_MAP.get(ptype, OpenAIProvider)
         if not cls:
             continue
 
