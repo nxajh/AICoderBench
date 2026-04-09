@@ -7,6 +7,7 @@ services:
       - "8000:8000"
     volumes:
       - ./problems:/app/problems:ro
+      - ./sandbox:/app/sandbox:ro
       - eval-data:/app/data
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
