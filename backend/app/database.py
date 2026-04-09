@@ -2,6 +2,7 @@
 SQLite 数据库层
 """
 import json
+import logging
 import aiosqlite
 import uuid
 from pathlib import Path
@@ -17,15 +18,12 @@ DB_PATH = DATABASE_URL.replace("sqlite:///", "")
 # 模块级共享连接
 _db: Optional[aiosqlite.Connection] = None
 
-# submissions 表是否仍含 model_id 列（旧 DB 迁移失败时为 True）
-_submissions_has_model_id: bool = False
-
 # 列名白名单
 VALID_SUBMISSION_COLUMNS = {
     "status", "generated_code", "raw_output", "used_tool_call",
     "generation_error", "eval_result", "total_score", "score_breakdown",
     "created_at", "finished_at", "generation_duration", "token_usage",
-    "model_uuid", "prompt",
+    "model_uuid", "prompt", "agent_round",
 }
 
 VALID_MODEL_COLUMNS = {
@@ -113,6 +111,11 @@ async def init_db():
         CREATE INDEX IF NOT EXISTS idx_submissions_model_status ON submissions(model_uuid, status);
     """)
 
+    # 启用 WAL 模式提升并发写入安全性
+    await db.execute("PRAGMA journal_mode=WAL")
+    await db.execute("PRAGMA busy_timeout=5000")
+    await db.commit()
+
     # 迁移：添加 generation_duration 字段（如果不存在）
     cursor = await db.execute("PRAGMA table_info(submissions)")
     columns = [row[1] for row in await cursor.fetchall()]
@@ -122,6 +125,8 @@ async def init_db():
         await db.execute("ALTER TABLE submissions ADD COLUMN token_usage TEXT DEFAULT '{}'")
     if "model_uuid" not in columns:
         await db.execute("ALTER TABLE submissions ADD COLUMN model_uuid TEXT DEFAULT ''")
+    if "agent_round" not in columns:
+        await db.execute("ALTER TABLE submissions ADD COLUMN agent_round INTEGER DEFAULT 0")
 
     # 迁移：rounds 表 model_ids → model_uuids
     cursor = await db.execute("PRAGMA table_info(rounds)")
@@ -130,15 +135,8 @@ async def init_db():
         await db.execute("ALTER TABLE rounds RENAME COLUMN model_ids TO model_uuids")
 
     # 迁移：submissions model_uuid 为空时用 model_id 填充（仅旧库有 model_id 列时执行）
-    global _submissions_has_model_id
     if "model_id" in columns:
         await db.execute("UPDATE submissions SET model_uuid = model_id WHERE model_uuid = '' AND model_id != ''")
-        try:
-            # 删除 model_id 列（SQLite 3.35+，且列未被 UNIQUE 约束引用时可用）
-            await db.execute("ALTER TABLE submissions DROP COLUMN model_id")
-        except Exception:
-            # 旧库中 model_id 在 UNIQUE 约束内无法 DROP，保留列并标记，INSERT 时补填
-            _submissions_has_model_id = True
 
     # 迁移：扩展 models 表
     cursor = await db.execute("PRAGMA table_info(models)")
@@ -197,8 +195,8 @@ async def init_db():
 
     await db.commit()
 
-    # Seed：从文件系统同步题目到数据库
-    await _seed_problems()
+    # 首次同步：从文件系统载入题目（startup 时再做全量 upsert）
+    await sync_problems_from_disk()
 
 
 # ---- Round 操作 ----
@@ -269,17 +267,10 @@ async def create_submission(round_id: str, problem_id: str, model_uuid: str) -> 
     await cur.close()
     if row:
         return row[0]
-    if _submissions_has_model_id:
-        # 旧库 model_id 列未能 DROP（在 UNIQUE 约束中），补填以满足 NOT NULL
-        cur = await db.execute(
-            "INSERT INTO submissions (round_id, problem_id, model_uuid, model_id, status, created_at) VALUES (?, ?, ?, ?, 'pending', ?)",
-            (round_id, problem_id, model_uuid, model_uuid, now)
-        )
-    else:
-        cur = await db.execute(
-            "INSERT INTO submissions (round_id, problem_id, model_uuid, status, created_at) VALUES (?, ?, ?, 'pending', ?)",
-            (round_id, problem_id, model_uuid, now)
-        )
+    cur = await db.execute(
+        "INSERT INTO submissions (round_id, problem_id, model_uuid, status, created_at) VALUES (?, ?, ?, 'pending', ?)",
+        (round_id, problem_id, model_uuid, now)
+    )
     await db.commit()
     return cur.lastrowid
 
@@ -315,6 +306,17 @@ async def get_submissions_by_round(round_id: str) -> list[dict]:
             result.append(d)
         return result
 
+
+
+async def get_round_progress(round_id: str) -> list[dict]:
+    """轻量级进度查询：仅返回状态字段，供前端高频轮询使用"""
+    db = await get_db()
+    async with db.execute(
+        "SELECT model_uuid, problem_id, status, agent_round, total_score FROM submissions WHERE round_id=?",
+        (round_id,)
+    ) as cursor:
+        rows = await cursor.fetchall()
+    return [dict(r) for r in rows]
 
 
 async def get_submission(round_id: str, problem_id: str, model_uuid: str) -> Optional[dict]:
@@ -713,7 +715,6 @@ async def list_model_configs() -> list[dict]:
             d["api_key_masked"] = _mask_key(d.get("api_key", ""))
             d.pop("api_key", None)
             d.pop("name", None)
-            d.pop("provider_type", None)
             d["enabled"] = bool(d.get("enabled", 1))
             d["thinking"] = bool(d.get("thinking", 0))
             result.append(d)
@@ -753,16 +754,26 @@ async def get_model_by_provider_model(provider: str, model: str, thinking: bool)
         return d
 
 
+_PROVIDER_DEFAULT_DISPLAY = {
+    "glm": "GLM", "kimi": "Kimi", "minimax": "MiniMax",
+    "openrouter": "OpenRouter", "openai": "OpenAI",
+}
+
+
 async def create_model_config(
-    provider: str, model: str, api_key: str, base_url: str = "",
-    thinking: bool = False,
+    provider_type: str, model: str, api_key: str, base_url: str = "",
+    thinking: bool = False, display_name: str = "",
 ) -> dict:
-    """创建模型配置，自动生成 UUID"""
+    """创建模型配置，自动生成 UUID。
+    provider_type: 技术类型（决定用哪个 API 类）
+    display_name:  UI 显示名，留空则从 provider_type 推断
+    """
+    badge_name = display_name.strip() or _PROVIDER_DEFAULT_DISPLAY.get(provider_type, provider_type)
     new_uuid = str(uuid.uuid4())
     db = await get_db()
     await db.execute(
         "INSERT INTO models (uuid, provider, model, thinking, api_key, base_url, provider_type, enabled) VALUES (?, ?, ?, ?, ?, ?, ?, 1)",
-        (new_uuid, provider, model, int(thinking), api_key, base_url, provider)
+        (new_uuid, badge_name, model, int(thinking), api_key, base_url, provider_type)
     )
     await db.commit()
     return {"uuid": new_uuid}
@@ -817,40 +828,66 @@ def _mask_key(key: str) -> str:
 
 # ---- Problem 操作 ----
 
-async def _seed_problems():
-    """从文件系统同步题目到数据库"""
+async def sync_problems_from_disk():
+    """从文件系统全量同步题目到数据库（文件是权威来源）。
+    - 新题：分配 uuid 并插入
+    - 已有题：更新所有字段（保留 uuid 以维持 submissions 外键）
+    - 孤立 DB 条目（文件已删除）：保留，不删除（保护历史提交记录）
+    """
     from .config import PROBLEMS_DIR
     if not PROBLEMS_DIR.exists():
         return
+    _logger = logging.getLogger(__name__)
     db = await get_db()
+    synced = 0
     for d in sorted(PROBLEMS_DIR.iterdir()):
         json_path = d / "problem.json"
         if not d.is_dir() or not json_path.exists():
             continue
-        meta = json.loads(json_path.read_text())
+        try:
+            meta = json.loads(json_path.read_text())
+        except (json.JSONDecodeError, OSError) as e:
+            _logger.warning(f"sync_problems_from_disk: skipping {d.name}: {e}")
+            continue
         slug = d.name
-        # 检查是否已存在（按 slug 查找）
+        problem_id = meta.get("id", slug)
+        scoring = meta.get("scoring", {})
+        # 验证权重之和
+        if scoring:
+            total_weight = sum(v for v in scoring.values() if isinstance(v, (int, float)))
+            if total_weight != 100:
+                _logger.warning(f"Problem {slug}: scoring weights sum to {total_weight}, expected 100")
         existing = await db.execute_fetchall("SELECT uuid FROM problems WHERE slug=?", (slug,))
         if existing:
-            continue
-        # 新题，插入
-        new_uuid = f"p-{uuid.uuid4().hex[:12]}"
-        scoring = meta.get("scoring", {})
-        # id 存储 problem.json 中定义的原始 ID（如 "06-memory-pool"），而非 uuid
-        problem_id = meta.get("id", slug)
-        await db.execute(
-            """INSERT OR IGNORE INTO problems
-            (uuid, slug, id, title, difficulty, language, tags, compile_flags,
-             timeout_seconds, scoring, has_benchmark, concurrent, perf_baseline_ms)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (new_uuid, slug, problem_id, meta.get("title", slug),
-             meta.get("difficulty", "medium"), meta.get("language", "c"),
-             json.dumps(meta.get("tags", [])), meta.get("compile_flags", ""),
-             meta.get("timeout_seconds", 30), json.dumps(scoring),
-             int(meta.get("has_benchmark", False)), int(meta.get("concurrent", True)),
-             meta.get("perf_baseline_ms", 100))
-        )
+            # 更新已有记录（保留 uuid）
+            await db.execute(
+                """UPDATE problems SET id=?, title=?, difficulty=?, language=?, tags=?,
+                   compile_flags=?, timeout_seconds=?, scoring=?, has_benchmark=?,
+                   concurrent=?, perf_baseline_ms=? WHERE slug=?""",
+                (problem_id, meta.get("title", slug),
+                 meta.get("difficulty", "medium"), meta.get("language", "c"),
+                 json.dumps(meta.get("tags", [])), meta.get("compile_flags", ""),
+                 meta.get("timeout_seconds", 30), json.dumps(scoring),
+                 int(meta.get("has_benchmark", False)), int(meta.get("concurrent", True)),
+                 meta.get("perf_baseline_ms", 0), slug)
+            )
+        else:
+            new_uuid = f"p-{uuid.uuid4().hex[:12]}"
+            await db.execute(
+                """INSERT INTO problems
+                (uuid, slug, id, title, difficulty, language, tags, compile_flags,
+                 timeout_seconds, scoring, has_benchmark, concurrent, perf_baseline_ms)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (new_uuid, slug, problem_id, meta.get("title", slug),
+                 meta.get("difficulty", "medium"), meta.get("language", "c"),
+                 json.dumps(meta.get("tags", [])), meta.get("compile_flags", ""),
+                 meta.get("timeout_seconds", 30), json.dumps(scoring),
+                 int(meta.get("has_benchmark", False)), int(meta.get("concurrent", True)),
+                 meta.get("perf_baseline_ms", 0))
+            )
+        synced += 1
     await db.commit()
+    _logger.info(f"sync_problems_from_disk: synced {synced} problems")
 
 
 async def list_problems_db() -> list[dict]:

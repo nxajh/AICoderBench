@@ -101,6 +101,15 @@ def list_problems() -> list[Problem]:
     return problems
 
 
+def _validate_scoring(scoring: dict | None) -> ScoringConfig:
+    """验证评分权重之和为 100，返回 ScoringConfig"""
+    cfg = ScoringConfig(**(scoring or {}))
+    total = sum(cfg.model_dump().values())
+    if total != 100:
+        raise ValueError(f"scoring 权重之和须为 100，当前为 {total}")
+    return cfg
+
+
 def create_problem(
     id: str,
     title: str,
@@ -120,7 +129,7 @@ def create_problem(
 
     problem_dir.mkdir(parents=True, exist_ok=True)
 
-    scoring_cfg = ScoringConfig(**(scoring or {}))
+    scoring_cfg = _validate_scoring(scoring)
 
     meta = {
         "id": id,
@@ -179,6 +188,7 @@ def update_problem(
     if scoring is not None:
         existing = meta.get("scoring", {})
         existing.update(scoring)
+        _validate_scoring(existing)   # 验证合并后权重仍为 100
         meta["scoring"] = existing
 
     meta_path.write_text(json.dumps(meta, indent=2, ensure_ascii=False))

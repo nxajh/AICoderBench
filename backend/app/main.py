@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from .api.routes import router
-from .config import RESULTS_DIR, PROBLEMS_DIR
+from .config import RESULTS_DIR, PROBLEMS_DIR, SANDBOX_CONCURRENCY
 from . import database as db
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
@@ -17,8 +17,12 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelna
 async def lifespan(app: FastAPI):
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     PROBLEMS_DIR.mkdir(parents=True, exist_ok=True)
-    await db.init_db()
-    logging.getLogger(__name__).info("Database initialized")
+    await db.init_db()                      # 建表 + 迁移 + 首次同步题目
+    await db.sync_problems_from_disk()      # 全量 upsert：确保文件变更被应用
+    _log = logging.getLogger(__name__)
+    _log.info("Database initialized and problems synced")
+    _log.info(f"Sandbox concurrency: {SANDBOX_CONCURRENCY} "
+              f"(set SANDBOX_CONCURRENCY=N to override)")
     yield
 
 

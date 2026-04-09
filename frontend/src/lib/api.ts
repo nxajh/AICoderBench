@@ -78,21 +78,45 @@ export interface ScoreBreakdown {
 }
 
 export interface EvalResult {
+  // 编译
   compile_success: boolean;
   compile_warnings: number;
   compile_errors: string;
+  compile_tsan_success: boolean;
+  compile_asan_success: boolean;
+  // 功能测试
   tests_passed: number;
   tests_total: number;
   test_output: string;
+  // TSan / ASan
   tsan_issues: number;
   tsan_output: string;
   asan_issues: number;
   asan_output: string;
-  cppcheck_errors: number;
-  cppcheck_warnings: number;
+  // 静态分析
+  clang_tidy_errors: number;
+  clang_tidy_warnings: number;
+  dangerous_apis: number;
+  // 复杂度 & 规模
   max_cyclomatic: number;
   avg_cyclomatic: number;
+  max_func_length: number;
   total_loc: number;
+  comment_ratio: number;
+  // 内存 & 线程
+  valgrind_leaks: number;
+  helgrind_issues: number;
+  // 性能
+  exec_time_ms: number;
+  // 各维度分数
+  score_compile: number;
+  score_tests: number;
+  score_safety: number;
+  score_resource: number;
+  score_quality: number;
+  score_performance: number;
+  score_total: number;
+  // 元信息
   error: string;
   timed_out: boolean;
 }
@@ -168,6 +192,19 @@ export interface ModelStats {
   model: string;
   thinking: boolean;
   problems: ModelProblem[];
+}
+
+export interface SubmissionProgress {
+  model_uuid: string;
+  problem_id: string;
+  status: string;
+  agent_round: number;
+  total_score: number;
+}
+
+export interface RoundProgress {
+  round_status: string;
+  submissions: SubmissionProgress[];
 }
 
 export interface RoundInfo {

@@ -13,7 +13,7 @@ async def main():
     
     round_id = await run_benchmark(
         problem_ids=["03-interpreter"],
-        model_ids=model_ids,
+        model_uuids=model_ids,
         providers=providers,
         round_name="03-interpreter 全模型评测"
     )

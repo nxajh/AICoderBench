@@ -106,7 +106,11 @@ class ModelProvider(ABC):
                 raw = json.dumps(resp, ensure_ascii=False)
                 return GenerationResult(files=files, raw_output=raw, used_tool_call=True, token_usage=usage)
         except Exception as e:
-            logger.warning(f"[{self.provider_id}] tool calling failed: {type(e).__name__}: {repr(e)}")
+            # 脱敏：从错误信息中移除 API key
+            safe_msg = repr(e)
+            if self.api_key:
+                safe_msg = safe_msg.replace(self.api_key, "***")
+            logger.warning(f"[{self.provider_id}] tool calling failed: {type(e).__name__}: {safe_msg}")
 
         # 兜底：纯文本生成 + 正则提取
         resp = await self._chat(messages, temperature=0, max_tokens=65536)
@@ -288,12 +292,40 @@ class MiniMaxProvider(ModelProvider):
         resp.raise_for_status()
         return resp.json()
 
+class OpenAIProvider(ModelProvider):
+    """通用 OpenAI-compatible provider，适用于 DeepSeek、Qwen、Doubao 等标准接口。"""
+    provider_id = "openai"
+
+    async def _chat(self, messages, tools=None, temperature=0, max_tokens=65536):
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        body = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        if tools:
+            body["tools"] = tools
+        client = await self._get_client()
+        resp = await client.post(
+            f"{self.base_url}/chat/completions",
+            headers=headers,
+            json=body,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+
 # Provider 类型映射
 PROVIDER_CLASS_MAP = {
     "glm": GLMProvider,
     "kimi": KimiProvider,
     "minimax": MiniMaxProvider,
     "openrouter": OpenRouterProvider,
+    "openai": OpenAIProvider,
 }
 
 
@@ -321,7 +353,7 @@ async def create_providers_from_db() -> dict[str, ModelProvider]:
             logger.warning(f"Skipping model uuid={cfg['uuid']}: no base_url configured")
             continue
 
-        cls = PROVIDER_CLASS_MAP.get(ptype)
+        cls = PROVIDER_CLASS_MAP.get(ptype, OpenAIProvider)
         if not cls:
             continue
 
@@ -331,7 +363,8 @@ async def create_providers_from_db() -> dict[str, ModelProvider]:
                 kwargs["thinking"] = full.get("thinking", False)
             providers[cfg["uuid"]] = cls(**kwargs)
         except Exception as e:
-            logger.warning(f"Failed to create provider uuid={cfg['uuid']}: {e}")
+            # 只记录异常类型，不记录异常消息（可能含 api_key）
+            logger.warning(f"Failed to create provider uuid={cfg['uuid']}: {type(e).__name__}")
     return providers
 
 
