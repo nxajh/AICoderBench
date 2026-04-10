@@ -59,10 +59,11 @@ class ModelProvider(ABC):
 
     _clients: dict[str, httpx.AsyncClient] = {}
 
-    def __init__(self, api_key: str, model: str, base_url: str):
+    def __init__(self, api_key: str, model: str, base_url: str, max_tokens: int = 65536):
         self.api_key = api_key
         self.model = model
         self.base_url = base_url.rstrip("/")
+        self.max_tokens = max_tokens
 
     async def _get_client(self) -> httpx.AsyncClient:
         key = f"{self.provider_id}:{self.base_url}"
@@ -185,8 +186,8 @@ class GLMProvider(ModelProvider):
     def provider_id(self) -> str:
         return "glm-thinking" if self.thinking else "glm"
 
-    def __init__(self, api_key: str, model: str, base_url: str, thinking: bool = False):
-        super().__init__(api_key, model, base_url)
+    def __init__(self, api_key: str, model: str, base_url: str, thinking: bool = False, max_tokens: int = 65536):
+        super().__init__(api_key, model, base_url, max_tokens)
         self.thinking = thinking
 
     async def _chat(self, messages, tools=None, temperature=0, max_tokens=65536):
@@ -358,7 +359,8 @@ async def create_providers_from_db() -> dict[str, ModelProvider]:
             continue
 
         try:
-            kwargs = dict(api_key=api_key, model=full["model"], base_url=base_url)
+            kwargs = dict(api_key=api_key, model=full["model"], base_url=base_url,
+                          max_tokens=int(full.get("max_tokens") or 65536))
             if cls == GLMProvider:
                 kwargs["thinking"] = full.get("thinking", False)
             providers[cfg["uuid"]] = cls(**kwargs)

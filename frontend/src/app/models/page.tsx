@@ -12,6 +12,7 @@ interface ModelConfig {
   base_url: string;
   enabled: boolean;
   thinking: boolean;
+  max_tokens: number;
 }
 
 interface EditForm {
@@ -20,6 +21,7 @@ interface EditForm {
   api_key: string;
   base_url: string;
   thinking: boolean;
+  max_tokens: number;
 }
 
 export default function ModelsPage() {
@@ -31,7 +33,7 @@ export default function ModelsPage() {
   const [saving, setSaving] = useState(false);
 
   function emptyForm(): EditForm {
-    return { display_name: "", api_model: "", api_key: "", base_url: "", thinking: false };
+    return { display_name: "", api_model: "", api_key: "", base_url: "", thinking: false, max_tokens: 65536 };
   }
 
   const load = async () => {
@@ -62,6 +64,7 @@ export default function ModelsPage() {
       api_key: "",
       base_url: m.base_url || "",
       thinking: m.thinking,
+      max_tokens: m.max_tokens ?? 65536,
     });
     setError("");
   };
@@ -95,6 +98,7 @@ export default function ModelsPage() {
             api_key: form.api_key,
             base_url: form.base_url,
             thinking: form.thinking,
+            max_tokens: form.max_tokens,
           }),
         });
         if (!res.ok) {
@@ -105,6 +109,7 @@ export default function ModelsPage() {
         const body: Record<string, unknown> = {
           base_url: form.base_url,
           thinking: form.thinking,
+          max_tokens: form.max_tokens,
         };
         if (form.api_key) body.api_key = form.api_key;
         const res = await fetch(`/api/model-configs/${editing}`, {
@@ -205,6 +210,14 @@ export default function ModelsPage() {
                   className="rounded" />
                 <label htmlFor="thinking" className="text-sm text-gray-300">启用思考模式（extended thinking）</label>
               </div>
+              <div>
+                <label className="block text-xs text-gray-400 mb-1">max_tokens（生成上限）</label>
+                <input type="number" value={form.max_tokens}
+                  onChange={e => setForm(f => ({ ...f, max_tokens: Math.max(1, parseInt(e.target.value) || 65536) }))}
+                  className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-sm"
+                  min={1} max={131072} step={1024} />
+                <p className="text-xs text-gray-500 mt-0.5">Dashscope 等上限为 65536，默认 65536</p>
+              </div>
             </div>
             <div className="mt-3 text-xs text-gray-500">模型将获得唯一 UUID 作为内部标识</div>
             <div className="flex gap-3 mt-5">
@@ -237,6 +250,7 @@ export default function ModelsPage() {
                 </div>
                 <div className="flex gap-4 mt-1 text-xs text-gray-500">
                   <span className="font-mono">{m.api_key_masked}</span>
+                  <span>max_tokens: {m.max_tokens ?? 65536}</span>
                 </div>
               </div>
               <div className="flex items-center gap-2 ml-4">

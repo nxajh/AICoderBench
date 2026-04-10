@@ -28,7 +28,7 @@ VALID_SUBMISSION_COLUMNS = {
 
 VALID_MODEL_COLUMNS = {
     "api_key", "base_url", "thinking", "enabled", "provider", "model",
-    "provider_type", "name",
+    "provider_type", "name", "max_tokens",
 }
 
 
@@ -71,7 +71,8 @@ async def init_db():
             api_key TEXT DEFAULT '',
             base_url TEXT DEFAULT '',
             provider_type TEXT NOT NULL,
-            enabled INTEGER DEFAULT 1
+            enabled INTEGER DEFAULT 1,
+            max_tokens INTEGER DEFAULT 65536
         );
 
         CREATE TABLE IF NOT EXISTS rounds (
@@ -194,6 +195,8 @@ async def init_db():
         await db.execute("ALTER TABLE models ADD COLUMN enabled INTEGER DEFAULT 1")
     if "thinking" not in model_columns:
         await db.execute("ALTER TABLE models ADD COLUMN thinking INTEGER DEFAULT 0")
+    if "max_tokens" not in model_columns:
+        await db.execute("ALTER TABLE models ADD COLUMN max_tokens INTEGER DEFAULT 65536")
     if "uuid" not in model_columns:
         # 旧 schema 用 id 作主键，重命名为 uuid
         if "id" in model_columns:
@@ -805,18 +808,19 @@ _PROVIDER_DEFAULT_DISPLAY = {
 
 async def create_model_config(
     provider_type: str, model: str, api_key: str, base_url: str = "",
-    thinking: bool = False, display_name: str = "",
+    thinking: bool = False, display_name: str = "", max_tokens: int = 65536,
 ) -> dict:
     """创建模型配置，自动生成 UUID。
     provider_type: 技术类型（决定用哪个 API 类）
     display_name:  UI 显示名，留空则从 provider_type 推断
+    max_tokens:    API 生成上限，按 provider 实际限制设置（如 Dashscope 最大 65536）
     """
     badge_name = display_name.strip() or _PROVIDER_DEFAULT_DISPLAY.get(provider_type, provider_type)
     new_uuid = str(uuid.uuid4())
     db = await get_db()
     await db.execute(
-        "INSERT INTO models (uuid, provider, model, thinking, api_key, base_url, provider_type, enabled) VALUES (?, ?, ?, ?, ?, ?, ?, 1)",
-        (new_uuid, badge_name, model, int(thinking), api_key, base_url, provider_type)
+        "INSERT INTO models (uuid, provider, model, thinking, api_key, base_url, provider_type, enabled, max_tokens) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)",
+        (new_uuid, badge_name, model, int(thinking), api_key, base_url, provider_type, max_tokens)
     )
     await db.commit()
     return {"uuid": new_uuid}
