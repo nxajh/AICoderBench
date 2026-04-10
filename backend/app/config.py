@@ -7,9 +7,19 @@ from pathlib import Path
 # 路径
 _config_file = Path(__file__).resolve()
 BASE_DIR = _config_file.parent.parent  # /app (backend 目录)
-PROBLEMS_DIR = BASE_DIR / "problems"
 RESULTS_DIR = BASE_DIR / "results"
 SANDBOX_DIR = BASE_DIR / "sandbox"
+
+# 题目目录：
+# - Docker 部署：docker-compose 将项目根 problems/ 挂载到 /app/problems（即 BASE_DIR/problems）
+# - 本地开发：backend/ 内无 problems/ 子目录，自动回退到项目根的 problems/
+# - 环境变量 PROBLEMS_DIR 可覆盖（优先级最高）
+_env_problems = os.getenv("PROBLEMS_DIR", "")
+if _env_problems:
+    PROBLEMS_DIR = Path(_env_problems)
+else:
+    _default_problems = BASE_DIR / "problems"
+    PROBLEMS_DIR = _default_problems if _default_problems.is_dir() else BASE_DIR.parent / "problems"
 
 # 数据库
 DATA_DIR = BASE_DIR / "data"

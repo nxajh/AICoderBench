@@ -16,7 +16,6 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelna
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    PROBLEMS_DIR.mkdir(parents=True, exist_ok=True)
     await db.init_db()                      # 建表 + 迁移 + 首次同步题目
     await db.sync_problems_from_disk()      # 全量 upsert：确保文件变更被应用
     _log = logging.getLogger(__name__)
