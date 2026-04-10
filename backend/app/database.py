@@ -28,7 +28,7 @@ VALID_SUBMISSION_COLUMNS = {
 
 VALID_MODEL_COLUMNS = {
     "api_key", "base_url", "thinking", "enabled", "provider", "model",
-    "provider_type", "name", "max_tokens",
+    "provider_type", "max_tokens",
 }
 
 
@@ -762,7 +762,7 @@ async def list_model_configs() -> list[dict]:
             d = dict(row)
             d["api_key_masked"] = _mask_key(d.get("api_key", ""))
             d.pop("api_key", None)
-            d.pop("name", None)
+            d.pop("name", None)   # legacy column, kept in DB for schema compat
             d["enabled"] = bool(d.get("enabled", 1))
             d["thinking"] = bool(d.get("thinking", 0))
             result.append(d)
