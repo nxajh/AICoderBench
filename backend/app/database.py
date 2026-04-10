@@ -197,6 +197,8 @@ async def init_db():
         await db.execute("ALTER TABLE models ADD COLUMN thinking INTEGER DEFAULT 0")
     if "max_tokens" not in model_columns:
         await db.execute("ALTER TABLE models ADD COLUMN max_tokens INTEGER DEFAULT 65536")
+    if "name" not in model_columns:
+        await db.execute("ALTER TABLE models ADD COLUMN name TEXT DEFAULT ''")
     if "uuid" not in model_columns:
         # 旧 schema 用 id 作主键，重命名为 uuid
         if "id" in model_columns:
@@ -819,8 +821,8 @@ async def create_model_config(
     new_uuid = str(uuid.uuid4())
     db = await get_db()
     await db.execute(
-        "INSERT INTO models (uuid, provider, model, thinking, api_key, base_url, provider_type, enabled, max_tokens) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)",
-        (new_uuid, badge_name, model, int(thinking), api_key, base_url, provider_type, max_tokens)
+        "INSERT INTO models (uuid, provider, model, thinking, api_key, base_url, provider_type, enabled, max_tokens, name) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
+        (new_uuid, badge_name, model, int(thinking), api_key, base_url, provider_type, max_tokens, badge_name)
     )
     await db.commit()
     return {"uuid": new_uuid}
