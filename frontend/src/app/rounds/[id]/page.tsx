@@ -187,8 +187,8 @@ export default function RoundDetailPage({ params }: { params: { id: string } }) 
         {isRunning && progress.length > 0 && (
           <section className="mb-10">
             <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-3">实时进度</h2>
-            <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
-              <table className="w-full text-sm">
+            <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-x-auto">
+              <table className="w-full text-sm min-w-max">
                 <thead>
                   <tr className="text-gray-500 border-b border-gray-800 text-xs uppercase">
                     <th className="px-4 py-2 text-left">模型</th>
@@ -235,8 +235,8 @@ export default function RoundDetailPage({ params }: { params: { id: string } }) 
         {leaderboard.length > 0 && (
           <section className="mb-12">
             <h2 className="text-lg font-semibold mb-4">排行榜</h2>
-            <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
-              <table className="w-full">
+            <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-x-auto">
+              <table className="w-full min-w-max">
                 <thead>
                   <tr className="text-left text-gray-400 text-sm border-b border-gray-800">
                     <th className="px-6 py-3">模型</th>

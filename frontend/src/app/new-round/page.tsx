@@ -169,7 +169,7 @@ export default function NewRoundPage() {
         {/* Submit */}
         <div className="border-t border-gray-800 pt-4">
           {error && <p className="text-red-400 text-sm mb-3">{error}</p>}
-          <div className="flex items-center gap-4">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-3">
             <span className="text-sm text-gray-400">
               {selectedModels.size} 个模型 × {selectedProblems.size} 道题 = {totalTasks} 个任务
             </span>
