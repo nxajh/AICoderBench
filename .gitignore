@@ -2,6 +2,8 @@ __pycache__/
 *.pyc
 .env
 *.db
+*.db-shm
+*.db-wal
 *.sqlite
 node_modules/
 .next/
