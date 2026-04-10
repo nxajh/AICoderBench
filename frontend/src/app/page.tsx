@@ -69,32 +69,32 @@ export default function HomePage() {
               <table className="w-full">
                 <thead>
                   <tr className="text-left text-gray-400 text-sm border-b border-gray-800">
-                    <th className="px-6 py-3 cursor-pointer hover:text-white" onClick={() => toggleSort("rank")}>排名{arrow("rank")}</th>
-                    <th className="px-6 py-3 cursor-pointer hover:text-white" onClick={() => toggleSort("model")}>模型{arrow("model")}</th>
-                    <th className="px-6 py-3 cursor-pointer hover:text-white" onClick={() => toggleSort("total_score")}>总分{arrow("total_score")}</th>
-                    <th className="px-6 py-3 cursor-pointer hover:text-white" onClick={() => toggleSort("problems_attempted")}>答题数量{arrow("problems_attempted")}</th>
-                    <th className="px-6 py-3 cursor-pointer hover:text-white" onClick={() => toggleSort("avg_score")}>平均分{arrow("avg_score")}</th>
-                    <th className="px-6 py-3 cursor-pointer hover:text-white" onClick={() => toggleSort("win_rate")}>胜率{arrow("win_rate")}</th>
-                    <th className="px-6 py-3 cursor-pointer hover:text-white" onClick={() => toggleSort("total_tokens")}>Token用量{arrow("total_tokens")}</th>
+                    <th className="px-4 py-3 cursor-pointer hover:text-white" onClick={() => toggleSort("rank")}>排名{arrow("rank")}</th>
+                    <th className="px-4 py-3 cursor-pointer hover:text-white" onClick={() => toggleSort("model")}>模型{arrow("model")}</th>
+                    <th className="px-4 py-3 cursor-pointer hover:text-white" onClick={() => toggleSort("total_score")}>总分{arrow("total_score")}</th>
+                    <th className="px-4 py-3 cursor-pointer hover:text-white hidden sm:table-cell" onClick={() => toggleSort("problems_attempted")}>答题数{arrow("problems_attempted")}</th>
+                    <th className="px-4 py-3 cursor-pointer hover:text-white" onClick={() => toggleSort("avg_score")}>均分{arrow("avg_score")}</th>
+                    <th className="px-4 py-3 cursor-pointer hover:text-white hidden sm:table-cell" onClick={() => toggleSort("win_rate")}>胜率{arrow("win_rate")}</th>
+                    <th className="px-4 py-3 cursor-pointer hover:text-white hidden md:table-cell" onClick={() => toggleSort("total_tokens")}>Token{arrow("total_tokens")}</th>
                   </tr>
                 </thead>
                 <tbody>
                   {sorted.map((entry, i) => (
                     <tr key={entry.model_uuid} className="border-b border-gray-800/50 hover:bg-gray-800/50 cursor-pointer transition-colors"
                         onClick={() => window.location.href = `/models/${entry.model_uuid}`}>
-                      <td className="px-6 py-3 font-mono text-gray-500">{i + 1}</td>
-                      <td className="px-6 py-3">
+                      <td className="px-4 py-3 font-mono text-gray-500">{i + 1}</td>
+                      <td className="px-4 py-3">
                         <ModelBadge model={entry.model} provider={entry.provider} thinking={entry.thinking} />
                       </td>
-                      <td className="px-6 py-3 text-cyan-400 font-mono">{entry.total_score}</td>
-                      <td className="px-6 py-3 text-gray-400">{entry.problems_attempted}</td>
-                      <td className="px-6 py-3 text-gray-400 font-mono">{entry.avg_score}</td>
-                      <td className="px-6 py-3">
+                      <td className="px-4 py-3 text-cyan-400 font-mono">{entry.total_score}</td>
+                      <td className="px-4 py-3 text-gray-400 hidden sm:table-cell">{entry.problems_attempted}</td>
+                      <td className="px-4 py-3 text-gray-400 font-mono">{entry.avg_score}</td>
+                      <td className="px-4 py-3 hidden sm:table-cell">
                         <span className={`font-mono ${entry.win_rate >= 80 ? 'text-green-400' : entry.win_rate >= 50 ? 'text-yellow-400' : 'text-red-400'}`}>
                           {entry.win_rate}%
                         </span>
                       </td>
-                      <td className="px-6 py-3 text-gray-400 font-mono">{entry.total_tokens > 0 ? (entry.total_tokens >= 1000 ? `${(entry.total_tokens / 1000).toFixed(1)}K` : entry.total_tokens) : '-'}</td>
+                      <td className="px-4 py-3 text-gray-400 font-mono hidden md:table-cell">{entry.total_tokens > 0 ? (entry.total_tokens >= 1000 ? `${(entry.total_tokens / 1000).toFixed(1)}K` : entry.total_tokens) : '-'}</td>
                     </tr>
                   ))}
                 </tbody>

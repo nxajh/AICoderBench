@@ -240,20 +240,20 @@ export default function ModelsPage() {
           )}
           {models.map(m => (
             <div key={m.uuid}
-              className={`rounded-lg border px-5 py-4 flex items-center justify-between transition-all ${
+              className={`rounded-lg border px-4 py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 transition-all ${
                 m.enabled ? "border-gray-700 bg-gray-900" : "border-gray-800 bg-gray-900/40 opacity-60"
               }`}>
               <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-3 flex-wrap">
                   <ModelBadge model={m.model} provider={m.provider} thinking={m.thinking} />
                   {!m.enabled && <span className="text-xs text-gray-500 bg-gray-800 px-2 py-0.5 rounded">已禁用</span>}
                 </div>
-                <div className="flex gap-4 mt-1 text-xs text-gray-500">
+                <div className="flex flex-wrap gap-3 mt-1 text-xs text-gray-500">
                   <span className="font-mono">{m.api_key_masked}</span>
                   <span>max_tokens: {m.max_tokens ?? 65536}</span>
                 </div>
               </div>
-              <div className="flex items-center gap-2 ml-4">
+              <div className="flex items-center gap-2 shrink-0">
                 <button onClick={() => handleToggleEnabled(m)}
                   className={`px-3 py-1 rounded text-xs ${m.enabled ? "bg-yellow-500/10 text-yellow-400 hover:bg-yellow-500/20" : "bg-green-500/10 text-green-400 hover:bg-green-500/20"}`}>
                   {m.enabled ? "禁用" : "启用"}

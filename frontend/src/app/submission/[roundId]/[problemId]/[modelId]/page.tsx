@@ -175,7 +175,7 @@ export default function SubmissionPage() {
   return (
     <>
       <Nav />
-      <main className="max-w-7xl mx-auto px-4 py-12">
+      <main className="max-w-7xl mx-auto px-4 py-8 sm:py-12">
         <div className="mb-8">
           <div className="flex items-center gap-1 mb-2">
             <span className="text-2xl font-bold bg-gradient-to-r from-cyan-400 to-blue-500 bg-clip-text text-transparent">

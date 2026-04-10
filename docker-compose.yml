@@ -13,7 +13,7 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - ./problems:/app/problems:ro
+      - ./problems:/app/problems:rw
       - eval-data:/app/data
       - /var/run/docker.sock:/var/run/docker.sock
       # 共享宿主机路径，使 backend 容器创建的 sandbox 子目录对 Docker daemon 可见

@@ -5,9 +5,17 @@ import { useRouter } from "next/navigation";
 import Nav from "@/components/nav";
 import { postAPI } from "@/lib/api";
 
-const SCORING_KEYS = ["compile", "tests", "concurrency", "memory", "quality", "performance", "efficiency"] as const;
+const SCORING_KEYS = ["compile", "tests", "safety", "resource", "quality", "performance"] as const;
+const SCORING_LABELS: Record<string, string> = {
+  compile: "编译 compile",
+  tests: "功能测试 tests",
+  safety: "安全性 safety",
+  resource: "资源管理 resource",
+  quality: "代码质量 quality",
+  performance: "性能 performance",
+};
 const DEFAULT_SCORING: Record<string, number> = {
-  compile: 10, tests: 20, concurrency: 25, memory: 15, quality: 10, performance: 10, efficiency: 10,
+  compile: 10, tests: 25, safety: 25, resource: 15, quality: 15, performance: 10,
 };
 
 export default function NewProblemPage() {
@@ -132,9 +140,9 @@ export default function NewProblemPage() {
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
               {SCORING_KEYS.map(key => (
                 <div key={key}>
-                  <label className="block text-xs text-gray-400 mb-1 capitalize">{key}</label>
+                  <label className="block text-xs text-gray-400 mb-1">{SCORING_LABELS[key]}</label>
                   <input type="number" value={form.scoring[key]} onChange={e => updateScoring(key, parseInt(e.target.value) || 0)}
-                    className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-sm" />
+                    className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-sm" min={0} max={100} />
                 </div>
               ))}
             </div>

@@ -3,7 +3,6 @@
 从 problems/ 目录加载题目定义
 """
 import json
-import os
 import re
 import shutil
 from pathlib import Path
@@ -146,11 +145,6 @@ def create_problem(
     (problem_dir / "problem.json").write_text(json.dumps(meta, indent=2, ensure_ascii=False))
     (problem_dir / "problem.md").write_text(description)
     (problem_dir / "solution.h").write_text(interface_h)
-
-    # 创建 test_framework.h 符号链接
-    symlink_path = problem_dir / "test_framework.h"
-    if not symlink_path.exists():
-        os.symlink("../test_framework.h", symlink_path)
 
     return load_problem(id)
 

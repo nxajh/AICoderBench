@@ -28,7 +28,10 @@ async function proxyRequest(request: Request, method: string) {
       opts.headers = { "Content-Type": "application/json" };
     }
     const res = await fetch(url, opts);
-    const data = await res.json();
+    const text = await res.text();
+    let data: unknown;
+    try { data = JSON.parse(text); }
+    catch { data = { detail: text || res.statusText }; }
     return NextResponse.json(data, { status: res.status });
   } catch (e) {
     return NextResponse.json({ detail: String(e) }, { status: 502 });
