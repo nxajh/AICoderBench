@@ -23,7 +23,7 @@ VALID_SUBMISSION_COLUMNS = {
     "status", "generated_code", "raw_output", "used_tool_call",
     "generation_error", "eval_result", "total_score", "score_breakdown",
     "created_at", "finished_at", "generation_duration", "token_usage",
-    "model_uuid", "prompt", "agent_round",
+    "model_uuid", "agent_round",
 }
 
 VALID_MODEL_COLUMNS = {
@@ -91,7 +91,6 @@ async def init_db():
             problem_id TEXT NOT NULL,
             model_uuid TEXT NOT NULL,
             status TEXT DEFAULT 'pending',
-            prompt TEXT DEFAULT '',
             generated_code TEXT DEFAULT '',
             raw_output TEXT DEFAULT '',
             used_tool_call INTEGER DEFAULT 0,
@@ -144,7 +143,7 @@ async def init_db():
         cursor2 = await db.execute("PRAGMA table_info(submissions)")
         current_cols = [row[1] for row in await cursor2.fetchall()]
         target_cols = {
-            "id", "round_id", "problem_id", "model_uuid", "status", "prompt",
+            "id", "round_id", "problem_id", "model_uuid", "status",
             "generated_code", "raw_output", "used_tool_call", "generation_error",
             "eval_result", "total_score", "score_breakdown", "created_at",
             "finished_at", "generation_duration", "token_usage", "agent_round",
@@ -158,7 +157,6 @@ async def init_db():
                 problem_id TEXT NOT NULL,
                 model_uuid TEXT NOT NULL,
                 status TEXT DEFAULT 'pending',
-                prompt TEXT DEFAULT '',
                 generated_code TEXT DEFAULT '',
                 raw_output TEXT DEFAULT '',
                 used_tool_call INTEGER DEFAULT 0,
@@ -377,7 +375,6 @@ async def get_submission(round_id: str, problem_id: str, model_uuid: str) -> Opt
         if not row:
             return None
         d = dict(row)
-        d.pop("prompt", None)
         # 解析 generation history
         if d.get("raw_output"):
             try:
