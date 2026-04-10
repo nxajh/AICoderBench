@@ -779,12 +779,12 @@ async def get_model_config(uuid: str) -> Optional[dict]:
         return d
 
 
-async def get_model_by_provider_model(provider: str, model: str, thinking: bool) -> Optional[dict]:
-    """根据 provider + model + thinking 查找模型"""
+async def get_model_by_provider_model(provider_type: str, model: str, thinking: bool) -> Optional[dict]:
+    """根据 provider_type + model + thinking 查找模型"""
     db = await get_db()
     async with db.execute(
-        "SELECT * FROM models WHERE provider=? AND model=? AND thinking=?",
-        (provider, model, int(thinking))
+        "SELECT * FROM models WHERE provider_type=? AND model=? AND thinking=?",
+        (provider_type, model, int(thinking))
     ) as cursor:
         row = await cursor.fetchone()
         if not row:
