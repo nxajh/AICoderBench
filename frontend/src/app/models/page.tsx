@@ -98,8 +98,8 @@ export default function ModelsPage() {
           }),
         });
         if (!res.ok) {
-          const d = await res.json();
-          throw new Error(d.detail || "添加失败");
+          const d = await res.json().catch(() => ({}));
+          throw new Error(d.detail || d.error || `添加失败 (HTTP ${res.status})`);
         }
       } else {
         const body: Record<string, unknown> = {
@@ -113,8 +113,8 @@ export default function ModelsPage() {
           body: JSON.stringify(body),
         });
         if (!res.ok) {
-          const d = await res.json();
-          throw new Error(d.detail || "更新失败");
+          const d = await res.json().catch(() => ({}));
+          throw new Error(d.detail || d.error || `更新失败 (HTTP ${res.status})`);
         }
       }
       setEditing(null);

@@ -31,7 +31,7 @@ async function proxyRequest(request: Request, method: string) {
     const data = await res.json();
     return NextResponse.json(data, { status: res.status });
   } catch (e) {
-    return NextResponse.json({ error: String(e) }, { status: 502 });
+    return NextResponse.json({ detail: String(e) }, { status: 502 });
   }
 }
 
