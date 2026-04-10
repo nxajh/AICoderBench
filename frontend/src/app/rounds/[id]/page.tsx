@@ -168,7 +168,13 @@ export default function RoundDetailPage({ params }: { params: { id: string } }) 
           <h1 className="text-2xl font-bold bg-gradient-to-r from-cyan-400 to-blue-500 bg-clip-text text-transparent">
             {round.name || round.id}
           </h1>
-          <StatusBadge status={round.status} />
+          <div className="flex items-center gap-3">
+            <StatusBadge status={round.status} />
+            <Link href="/new-round"
+              className="px-3 py-1 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-xs text-white">
+              + 新评测
+            </Link>
+          </div>
         </div>
         <p className="text-gray-500 text-sm mb-6">{round.created_at?.slice(0, 10)}</p>
 
