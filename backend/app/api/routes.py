@@ -28,6 +28,7 @@ class CreateModelRequest(BaseModel):
     base_url: str = ""
     thinking: bool = False
     display_name: str = ""     # 显示名称，留空则自动推断
+    max_tokens: int = 65536    # 生成上限，按 provider 实际限制设置（如 Dashscope 最大 65536）
 
 
 class UpdateModelRequest(BaseModel):
@@ -35,6 +36,7 @@ class UpdateModelRequest(BaseModel):
     base_url: Optional[str] = None
     thinking: Optional[bool] = None
     enabled: Optional[bool] = None
+    max_tokens: Optional[int] = None
 
 
 class CreateProblemRequest(BaseModel):
@@ -287,6 +289,7 @@ async def create_model_config(req: CreateModelRequest):
         api_key=req.api_key,
         base_url=req.base_url,
         thinking=req.thinking,
+        max_tokens=req.max_tokens,
     )
 
 

@@ -478,7 +478,7 @@ async def run_agent(
                         messages,
                         tools=AGENT_TOOLS,
                         temperature=0,
-                        max_tokens=AGENT_MAX_TOKENS,
+                        max_tokens=getattr(provider, "max_tokens", AGENT_MAX_TOKENS),
                     )
                     break
                 except Exception as e:
