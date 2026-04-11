@@ -207,20 +207,102 @@ class AnthropicProvider(ModelProvider):
         self.thinking = thinking
         self.thinking_budget = thinking_budget
 
+    @staticmethod
+    def _convert_tools(tools: list[dict]) -> list[dict]:
+        """将 OpenAI function calling 格式转为 Anthropic tool 格式"""
+        result = []
+        for t in tools:
+            if t.get("type") == "function":
+                # OpenAI 格式: {"type": "function", "function": {"name": ..., "parameters": ...}}
+                fn = t["function"]
+                result.append({
+                    "name": fn["name"],
+                    "description": fn.get("description", ""),
+                    "input_schema": fn.get("parameters", {"type": "object", "properties": {}}),
+                })
+            elif "name" in t and "input_schema" in t:
+                # 已经是 Anthropic 格式，原样保留
+                result.append(t)
+            else:
+                result.append(t)
+        return result
+
+    @staticmethod
+    def _convert_messages(messages: list[dict]) -> list[dict]:
+        """将 OpenAI 格式的 messages 列表转为 Anthropic Messages API 格式"""
+        result = []
+        i = 0
+        while i < len(messages):
+            m = messages[i]
+            role = m.get("role", "")
+
+            if role == "user":
+                content = m.get("content", "")
+                result.append({"role": "user", "content": content})
+                i += 1
+
+            elif role == "assistant":
+                tool_calls = m.get("tool_calls", [])
+                text = m.get("content") or ""
+                thinking = m.get("reasoning_content") or ""
+                content_blocks: list[dict] = []
+                # thinking block 必须在 text 之前（Anthropic 要求）
+                if thinking:
+                    content_blocks.append({"type": "thinking", "thinking": thinking})
+                if text:
+                    content_blocks.append({"type": "text", "text": text})
+                for tc in tool_calls:
+                    fn = tc.get("function", {})
+                    args_str = fn.get("arguments", "{}")
+                    try:
+                        args = json.loads(args_str)
+                    except (json.JSONDecodeError, TypeError):
+                        args = {}
+                    content_blocks.append({
+                        "type": "tool_use",
+                        "id": tc.get("id", ""),
+                        "name": fn.get("name", ""),
+                        "input": args,
+                    })
+                result.append({
+                    "role": "assistant",
+                    "content": content_blocks if content_blocks else [{"type": "text", "text": ""}],
+                })
+                i += 1
+
+            elif role == "tool":
+                # 收集连续的 tool 消息，合并为一条 user 消息中的 tool_result 块
+                tool_results = []
+                while i < len(messages) and messages[i].get("role") == "tool":
+                    tr = messages[i]
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": tr.get("tool_call_id", ""),
+                        "content": tr.get("content", ""),
+                    })
+                    i += 1
+                result.append({"role": "user", "content": tool_results})
+
+            else:
+                i += 1
+
+        return result
+
     async def _chat(self, messages, tools=None, temperature=0, max_tokens=65536):
         headers = {
             "x-api-key": self.api_key,
             "anthropic-version": "2023-06-01",
             "Content-Type": "application/json",
         }
-        # 将 system 消息从 messages 中分离
+        # 将 system 消息从 messages 中分离，其余转为 Anthropic 格式
         system = ""
-        filtered_messages = []
+        non_system = []
         for m in messages:
             if m.get("role") == "system":
                 system = m.get("content", "")
             else:
-                filtered_messages.append(m)
+                non_system.append(m)
+        filtered_messages = self._convert_messages(non_system)
 
         body: dict = {
             "model": self.model,
@@ -230,7 +312,7 @@ class AnthropicProvider(ModelProvider):
         if system:
             body["system"] = system
         if tools:
-            body["tools"] = tools  # 调用方传入 ANTHROPIC_TOOLS 格式
+            body["tools"] = self._convert_tools(tools)  # 自动转换 OpenAI 格式 → Anthropic 格式
         if self.thinking:
             # 开启 extended thinking 时不能设置 temperature
             body["thinking"] = {"type": "enabled", "budget_tokens": self.thinking_budget}
