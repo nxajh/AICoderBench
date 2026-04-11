@@ -41,23 +41,51 @@ export async function deleteAPI<T = unknown>(path: string): Promise<T> {
   return res.json();
 }
 
-// Types
+// ---- Types ----
+
 export interface Problem {
-  uuid: string;
-  slug: string;
+  id: string;           // "01-rate-limiter"，即目录名
   title: string;
   difficulty: string;
   language: string;
   tags: string[];
   description?: string;
   scoring: Record<string, number>;
+  concurrent?: boolean;
 }
 
-// model_id in submissions/rounds is now model_uuid
+export interface Provider {
+  uuid: string;
+  name: string;
+  api_format: string;   // "openai" | "anthropic"
+  api_key_masked: string;
+  base_url: string;
+}
+
+export interface ModelConfig {
+  uuid: string;
+  provider_uuid: string;
+  provider_name: string;
+  model_id: string;
+  api_format: string;
+  thinking: boolean;
+  thinking_budget: number;
+  enabled: boolean;
+  max_tokens: number;
+}
+
+// 用于评测轮次选择的简化模型信息
+export interface ModelSelectItem {
+  uuid: string;
+  provider_name: string;
+  model_id: string;
+  thinking: boolean;
+}
+
 export interface LeaderboardEntry {
   model_uuid: string;
-  provider: string;
-  model: string;
+  provider: string;     // provider_name
+  model: string;        // model_id
   thinking: boolean;
   total_problems: number;
   total_score: number;
@@ -69,46 +97,35 @@ export interface ScoreBreakdown {
   compile?: number;
   tests?: number;
   safety?: number;
-  concurrency?: number;  // 旧数据兼容
-  memory?: number;       // 旧数据兼容
   quality?: number;
   resource?: number;
   performance?: number;
-  efficiency?: number;   // 旧数据兼容
 }
 
 export interface EvalResult {
-  // 编译
   compile_success: boolean;
   compile_warnings: number;
   compile_errors: string;
   compile_tsan_success: boolean;
   compile_asan_success: boolean;
-  // 功能测试
   tests_passed: number;
   tests_total: number;
   test_output: string;
-  // TSan / ASan
   tsan_issues: number;
   tsan_output: string;
   asan_issues: number;
   asan_output: string;
-  // 静态分析
   clang_tidy_errors: number;
   clang_tidy_warnings: number;
   dangerous_apis: number;
-  // 复杂度 & 规模
   max_cyclomatic: number;
   avg_cyclomatic: number;
   max_func_length: number;
   total_loc: number;
   comment_ratio: number;
-  // 内存 & 线程
   valgrind_leaks: number;
   helgrind_issues: number;
-  // 性能
   exec_time_ms: number;
-  // 各维度分数
   score_compile: number;
   score_tests: number;
   score_safety: number;
@@ -116,41 +133,8 @@ export interface EvalResult {
   score_quality: number;
   score_performance: number;
   score_total: number;
-  // 元信息
   error: string;
   timed_out: boolean;
-}
-
-export interface Submission {
-  id: number;
-  round_id: string;
-  problem_id: string;
-  model_uuid: string;
-  status: string;
-  generated_code: string;
-  used_tool_call: boolean;
-  generation_error: string;
-  eval_result: EvalResult | null;
-  total_score: number;
-  score_breakdown: ScoreBreakdown | null;
-  created_at: string;
-  finished_at: string;
-  token_usage?: Record<string, number>;
-  generation_duration?: number;
-  model_name?: string;
-  model_provider?: string;
-  model_thinking?: boolean;
-  generation_history?: GenerationRound[];
-}
-
-export interface GenerationRound {
-  round: number;
-  time: number;
-  tool_calls: GenerationToolCall[];
-  thinking?: string;
-  output?: string;
-  text_preview?: string;
-  note?: string;
 }
 
 export interface GenerationToolCall {
@@ -160,6 +144,38 @@ export interface GenerationToolCall {
   compile_success?: boolean;
   test_success?: boolean;
   submitted?: boolean;
+}
+
+export interface GenerationRound {
+  round: number;
+  time: number;
+  tool_calls: GenerationToolCall[];
+  thinking?: string;
+  output?: string;
+  note?: string;
+}
+
+export interface Submission {
+  round_id: string;
+  problem_id: string;
+  model_uuid: string;
+  status: string;
+  agent_round: number;
+  used_tool_call: boolean;
+  generated_code: string;
+  generation_history: GenerationRound[];
+  generation_duration: number;
+  token_usage: Record<string, number>;
+  generation_error: string;
+  eval_result: EvalResult | null;
+  score_breakdown: ScoreBreakdown | null;
+  total_score: number;
+  created_at: string;
+  finished_at: string | null;
+  // 附加的 model 元信息（后端 join 后附上）
+  model_name?: string;
+  model_provider?: string;
+  model_thinking?: boolean;
 }
 
 export interface GlobalLeaderboardEntry {
@@ -182,7 +198,6 @@ export interface ModelProblem {
   worst_score: number;
   avg_score: number;
   submission_count: number;
-  thinking: boolean;
   avg_tokens: { prompt: number; completion: number; total: number };
 }
 
@@ -214,7 +229,6 @@ export interface RoundInfo {
   problem_ids: string[];
   model_uuids: string[];
   created_at: string;
-  finished_at: string;
+  finished_at: string | null;
   leaderboard?: LeaderboardEntry[];
 }
-

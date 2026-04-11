@@ -96,16 +96,9 @@ function GenerationProcess({ history }: { history: GenerationRound[] }) {
   return (
     <div className="space-y-3">
       {history.map((round) => {
-        // 兼容旧格式 text_preview 和新格式 thinking/output
-        const thinking = round.thinking || "";
-        const output = round.output || "";
-        const oldText = round.text_preview || "";
+        const displayThinking = round.thinking || "";
+        const displayOutput = round.output || "";
         const note = round.note || "";
-
-        // 新格式直接用 thinking/output
-        // 旧格式（只有 text_preview）整体当输出，不拆分
-        const displayThinking = thinking || "";
-        const displayOutput = output || oldText || "";
 
         return (
           <div key={round.round} className="border border-gray-800 rounded-lg overflow-hidden">
@@ -154,7 +147,7 @@ export default function SubmissionPage() {
     fetchAPI<Problem[]>("/api/problems")
       .then((list) => {
         const m: Record<string, Problem> = {};
-        list.forEach((p) => { m[p.uuid] = p; });
+        list.forEach((p) => { m[p.id] = p; });
         setProblemMap(m);
       })
       .catch(() => {});
@@ -285,9 +278,9 @@ export default function SubmissionPage() {
             <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
               <Bar label="编译" value={sb.compile ?? 0} max={10} />
               <Bar label="功能" value={sb.tests ?? 0} max={25} />
-              <Bar label="安全性" value={(sb.safety ?? sb.concurrency ?? 0)} max={25} />
+              <Bar label="安全性" value={sb.safety ?? 0} max={25} />
               <Bar label="代码质量" value={sb.quality ?? 0} max={15} />
-              <Bar label="资源管理" value={(sb.resource ?? sb.memory ?? 0)} max={15} />
+              <Bar label="资源管理" value={sb.resource ?? 0} max={15} />
               <Bar label="性能" value={sb.performance ?? 0} max={10} />
               <div className="mt-4 pt-4 border-t border-gray-800 flex items-center gap-3">
                 <span className="text-sm text-gray-400">总分</span>

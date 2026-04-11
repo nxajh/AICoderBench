@@ -30,10 +30,9 @@ class Problem(BaseModel):
     interface_h: str = ""       # solution.h 内容
     compile_flags: str = ""     # 额外编译参数，如 -lpthread -lm
     timeout_seconds: int = 30
-    has_benchmark: bool = False
     scoring: ScoringConfig = ScoringConfig()
     concurrent: bool = True
-    perf_baseline_ms: int = 100
+    perf_baseline_ms: int = 0
 
 
 def _find_problem_dir(problem_id: str) -> Path:
@@ -84,7 +83,6 @@ def load_problem(problem_id: str) -> Problem:
         interface_h=interface_h,
         compile_flags=meta.get("compile_flags", ""),
         timeout_seconds=meta.get("timeout_seconds", 30),
-        has_benchmark=meta.get("has_benchmark", False),
         scoring=ScoringConfig(**meta.get("scoring", {})),
     )
 
@@ -138,7 +136,6 @@ def create_problem(
         "tags": tags or [],
         "compile_flags": compile_flags,
         "timeout_seconds": timeout_seconds,
-        "has_benchmark": False,
         "scoring": scoring_cfg.model_dump(),
     }
 

@@ -4,14 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Nav from "@/components/nav";
 import ModelBadge from "@/components/model-badge";
-import type { Problem } from "@/lib/api";
-
-interface ModelSelectItem {
-  uuid: string;
-  provider: string;
-  api_model: string;
-  thinking: boolean;
-}
+import type { Problem, ModelSelectItem } from "@/lib/api";
 
 export default function NewRoundPage() {
   const router = useRouter();
@@ -48,7 +41,7 @@ export default function NewRoundPage() {
     if (selectedProblems.size === problems.length) {
       setSelectedProblems(new Set());
     } else {
-      setSelectedProblems(new Set(problems.map(p => p.uuid)));
+      setSelectedProblems(new Set(problems.map(p => p.id)));
     }
   };
 
@@ -133,7 +126,7 @@ export default function NewRoundPage() {
                 }`}
               >
                 <div className="font-medium">
-                  <ModelBadge model={m.api_model} provider={m.provider} thinking={m.thinking} />
+                  <ModelBadge model={m.model_id} provider={m.provider_name} thinking={m.thinking} />
                 </div>
               </button>
             ))}
@@ -151,10 +144,10 @@ export default function NewRoundPage() {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             {problems.map(p => (
               <button
-                key={p.uuid}
-                onClick={() => toggleProblem(p.uuid)}
+                key={p.id}
+                onClick={() => toggleProblem(p.id)}
                 className={`rounded-lg border px-4 py-3 text-left transition-all ${
-                  selectedProblems.has(p.uuid)
+                  selectedProblems.has(p.id)
                     ? "border-cyan-500 bg-cyan-500/10 text-cyan-400"
                     : "border-gray-700 bg-gray-900 text-gray-300 hover:border-gray-500"
                 }`}

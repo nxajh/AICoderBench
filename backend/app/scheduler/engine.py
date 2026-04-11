@@ -5,13 +5,6 @@
   - 生成：多模型并行（同一模型的多道题串行，避免单模型 API 限流）
   - 评测：生成完成后立刻触发，不等待其他模型；信号量限制 Docker 容器数
   - 生成与评测完全重叠，消除两阶段串行等待
-
-时序示意（3 模型 × 2 题，SANDBOX_CONCURRENCY=2）：
-
-  Model A: gen_A1 ──→ eval_A1 ──→ gen_A2 ──→ eval_A2
-  Model B: gen_B1 ──→ eval_B1 ──→ gen_B2 ──→ eval_B2   (与 A 并行)
-  Model C: gen_C1 ──→ eval_C1 ──→ gen_C2 ──→ eval_C2   (与 A/B 并行)
-                       ↑ eval 之间受信号量限制最多同时跑 SANDBOX_CONCURRENCY 个
 """
 import asyncio
 import json
@@ -32,33 +25,30 @@ from .. import database as db
 
 logger = logging.getLogger(__name__)
 
-GEN_TIMEOUT = 7200   # 单个 agent 运行超时（秒）
+GEN_TIMEOUT = 7200
 MAX_429_RETRIES = 3
-MAX_429_WAIT = 120   # 单次退避等待上限（秒）
+MAX_429_WAIT = 120
 
-
-# ---- 数据类 ----
 
 @dataclass
 class GenTask:
     problem: Problem
-    problem_uuid: str
+    problem_id: str        # problems.id（文件系统目录名）
     model_uuid: str
+    round_id: str
     provider: ModelProvider
-    sub_id: int = 0
     result: Optional[AgentRunResult] = None
 
 
 @dataclass
 class EvalTask:
     problem: Problem
+    problem_id: str
     model_uuid: str
+    round_id: str
     code_files: dict[str, str]
     token_usage: dict
-    sub_id: int
 
-
-# ---- 辅助 ----
 
 def _is_429_error(exc: Exception) -> bool:
     return "429" in str(exc) or "rate_limit" in str(exc).lower()
@@ -70,8 +60,6 @@ async def _wait_with_backoff(attempt: int):
     await asyncio.sleep(wait_time)
 
 
-# ---- 主调度器 ----
-
 async def run_benchmark(
     problem_ids: list[str],
     model_uuids: list[str],
@@ -79,7 +67,6 @@ async def run_benchmark(
     round_name: str = "",
     round_id: str = "",
 ) -> str:
-    """主入口：并行生成 + 流水线评测。"""
     if not round_id:
         round_id = f"round-{uuid.uuid4().hex[:8]}"
         await db.create_round(round_id, problem_ids, model_uuids, round_name)
@@ -90,12 +77,12 @@ async def run_benchmark(
     except Exception as e:
         logger.error(f"Round {round_id}: unexpected error: {e}", exc_info=True)
         await db.update_round_status(round_id, "failed")
-        # 把仍在 pending/generating 的 submission 标记为 failed，避免永久卡住
         subs = await db.get_submissions_by_round(round_id)
         for s in subs:
             if s.get("status") in ("pending", "generating", "evaluating"):
                 await db.update_submission(
-                    s["id"], status="failed",
+                    s["round_id"], s["problem_id"], s["model_uuid"],
+                    status="failed",
                     generation_error=f"scheduler crash: {e}",
                     finished_at=datetime.utcnow().isoformat(),
                 )
@@ -108,14 +95,10 @@ async def _run_benchmark_inner(
     model_uuids: list[str],
     providers: dict[str, ModelProvider],
 ) -> None:
-    """实际调度逻辑，由 run_benchmark 包裹异常处理。"""
-
-    # 构建任务列表
     gen_tasks: list[GenTask] = []
     for pid in problem_ids:
-        slug = await db.get_problem_slug_by_uuid(pid)
         try:
-            problem = load_problem(slug or pid)
+            problem = load_problem(pid)
         except (FileNotFoundError, ValueError) as e:
             logger.warning(f"Problem not found, skipping {pid}: {e}")
             continue
@@ -124,8 +107,11 @@ async def _run_benchmark_inner(
                 logger.warning(f"Model not configured: {mid}")
                 continue
             gen_tasks.append(GenTask(
-                problem=problem, problem_uuid=pid,
-                model_uuid=mid, provider=providers[mid],
+                problem=problem,
+                problem_id=pid,
+                model_uuid=mid,
+                round_id=round_id,
+                provider=providers[mid],
             ))
 
     if not gen_tasks:
@@ -133,40 +119,33 @@ async def _run_benchmark_inner(
         return
 
     for task in gen_tasks:
-        task.sub_id = await db.create_submission(round_id, task.problem_uuid, task.model_uuid)
+        await db.create_submission(round_id, task.problem_id, task.model_uuid)
 
     n_models = len({t.model_uuid for t in gen_tasks})
     n_hosts = len({urlparse(t.provider.base_url).hostname for t in gen_tasks})
     logger.info(
         f"Round {round_id}: {len(gen_tasks)} tasks, "
-        f"{n_models} models / {n_hosts} API hosts (hosts parallel), "
-        f"eval_concurrency={SANDBOX_CONCURRENCY}"
+        f"{n_models} models / {n_hosts} API hosts, eval_concurrency={SANDBOX_CONCURRENCY}"
     )
 
-    # 评测信号量：限制同时运行的 Docker 容器数
     eval_sem = asyncio.Semaphore(SANDBOX_CONCURRENCY)
-    # 追踪所有已派发的评测 Task，最后统一 await
     spawned_evals: list[asyncio.Task] = []
 
     async def _gen_then_eval(task: GenTask):
-        """生成一道题；成功后立刻派发评测，不等其他任务。"""
-        success = await _attempt_gen_task(round_id, task)
+        success = await _attempt_gen_task(task)
         if not success or not task.result or not task.result.files.get("solution.c"):
             return
         eval_task = EvalTask(
             problem=task.problem,
+            problem_id=task.problem_id,
             model_uuid=task.model_uuid,
+            round_id=task.round_id,
             code_files=dict(task.result.files),
             token_usage=task.result.total_token_usage or {},
-            sub_id=task.sub_id,
         )
-        # asyncio.create_task 立刻调度，不阻塞当前协程
         t = asyncio.create_task(_run_eval_with_sem(eval_task, eval_sem))
         spawned_evals.append(t)
 
-    # 同一 API 域名的任务串行（避免触发 provider 级限速），不同域名并行。
-    # 用 base_url hostname 而非 provider_id 做 key，这样同类型但不同域名的模型
-    # （如两个 OpenAI-compatible 分别指向 DeepSeek 和 Qwen）仍可并行。
     def _rate_limit_key(task: GenTask) -> str:
         host = urlparse(task.provider.base_url).hostname or task.provider.base_url
         return host
@@ -179,40 +158,29 @@ async def _run_benchmark_inner(
         for task in tasks:
             await _gen_then_eval(task)
 
-    await asyncio.gather(
-        *[_run_provider_group(tasks) for tasks in by_host.values()]
-    )
+    await asyncio.gather(*[_run_provider_group(tasks) for tasks in by_host.values()])
 
-    # 等待所有已派发的评测任务完成
     if spawned_evals:
         await asyncio.gather(*spawned_evals, return_exceptions=True)
 
     await db.update_round_status(round_id, "done")
 
 
-# ---- Generation ----
-
-async def _attempt_gen_task(round_id: str, task: GenTask) -> bool:
-    """执行单个生成任务，含 429 重试。成功返回 True 并更新 DB。"""
-    # 幂等：跳过已处理的任务（断点续跑）
-    existing = await db.get_submission(round_id, task.problem_uuid, task.model_uuid)
+async def _attempt_gen_task(task: GenTask) -> bool:
+    existing = await db.get_submission(task.round_id, task.problem_id, task.model_uuid)
     if existing and existing["status"] in ("done", "failed", "generated", "evaluating"):
-        logger.info(f"Skip {task.problem.id}/{task.model_uuid[:8]}: already {existing['status']}")
-        # 已 generated 则认为成功，让调用者决定是否重新评测
+        logger.info(f"Skip {task.problem_id}/{task.model_uuid[:8]}: already {existing['status']}")
         return existing["status"] == "generated"
 
-    await db.update_submission(task.sub_id, status="generating")
+    await db.update_submission(task.round_id, task.problem_id, task.model_uuid, status="generating")
 
     for attempt in range(MAX_429_RETRIES):
         try:
-            sub_id = task.sub_id
-
             async def _on_progress(round_num: int):
-                await db.update_submission(sub_id, agent_round=round_num)
+                await db.update_submission(task.round_id, task.problem_id, task.model_uuid, agent_round=round_num)
 
             result = await asyncio.wait_for(
-                run_agent(task.provider, task.problem,
-                          total_timeout=GEN_TIMEOUT, on_progress=_on_progress),
+                run_agent(task.provider, task.problem, total_timeout=GEN_TIMEOUT, on_progress=_on_progress),
                 timeout=GEN_TIMEOUT + 60,
             )
             task.result = result
@@ -220,34 +188,37 @@ async def _attempt_gen_task(round_id: str, task: GenTask) -> bool:
             if result and result.files.get("solution.c"):
                 token_usage = result.total_token_usage or {}
                 await db.update_submission(
-                    task.sub_id,
+                    task.round_id, task.problem_id, task.model_uuid,
                     status="generated",
                     generated_code=result.files["solution.c"],
-                    raw_output=json.dumps(result.history, ensure_ascii=False)[:100000],
+                    generation_history=json.dumps(result.history, ensure_ascii=False)[:200000],
                     used_tool_call=1,
                     token_usage=json.dumps(token_usage),
                     generation_duration=result.total_time,
+                    agent_round=result.rounds,
                 )
                 logger.info(
-                    f"[{task.model_uuid[:8]}] {task.problem.id}: generated "
+                    f"[{task.model_uuid[:8]}] {task.problem_id}: generated "
                     f"({result.rounds} rounds, {result.total_time:.1f}s, {result.finish_reason})"
                 )
                 return True
             else:
                 error_msg = result.error if result else "no result"
                 await db.update_submission(
-                    task.sub_id, status="failed",
+                    task.round_id, task.problem_id, task.model_uuid,
+                    status="failed",
                     generation_error=f"no solution: {error_msg}",
                     generation_duration=result.total_time if result else 0,
                     finished_at=datetime.utcnow().isoformat(),
                 )
-                logger.warning(f"[{task.model_uuid[:8]}] {task.problem.id}: no solution ({error_msg})")
+                logger.warning(f"[{task.model_uuid[:8]}] {task.problem_id}: no solution ({error_msg})")
                 return False
 
         except asyncio.TimeoutError:
-            logger.warning(f"[{task.model_uuid[:8]}] {task.problem.id}: timed out after {GEN_TIMEOUT}s")
+            logger.warning(f"[{task.model_uuid[:8]}] {task.problem_id}: timed out after {GEN_TIMEOUT}s")
             await db.update_submission(
-                task.sub_id, status="failed",
+                task.round_id, task.problem_id, task.model_uuid,
+                status="failed",
                 generation_error=f"generation timed out ({GEN_TIMEOUT}s)",
                 finished_at=datetime.utcnow().isoformat(),
             )
@@ -257,9 +228,10 @@ async def _attempt_gen_task(round_id: str, task: GenTask) -> bool:
             if _is_429_error(e) and attempt < MAX_429_RETRIES - 1:
                 await _wait_with_backoff(attempt)
                 continue
-            logger.error(f"[{task.model_uuid[:8]}] {task.problem.id}: error: {e}")
+            logger.error(f"[{task.model_uuid[:8]}] {task.problem_id}: error: {e}")
             await db.update_submission(
-                task.sub_id, status="failed",
+                task.round_id, task.problem_id, task.model_uuid,
+                status="failed",
                 generation_error=str(e)[:500],
                 finished_at=datetime.utcnow().isoformat(),
             )
@@ -268,16 +240,13 @@ async def _attempt_gen_task(round_id: str, task: GenTask) -> bool:
     return False
 
 
-# ---- Evaluation ----
-
 async def _run_eval_with_sem(task: EvalTask, sem: asyncio.Semaphore):
     async with sem:
         await _run_eval_task(task)
 
 
 async def _run_eval_task(task: EvalTask):
-    """单个评测任务：状态更新 → 沙箱 → 打分 → 入库。"""
-    await db.update_submission(task.sub_id, status="evaluating")
+    await db.update_submission(task.round_id, task.problem_id, task.model_uuid, status="evaluating")
 
     problem_dir = _find_problem_dir(task.problem.id)
     eval_result = await _eval_with_retry(task.code_files, problem_dir)
@@ -304,14 +273,14 @@ async def _run_eval_task(task: EvalTask):
     expected = sum(score_breakdown.values())
     if expected != eval_result.score_total:
         logger.warning(
-            f"[{task.model_uuid[:8]}] {task.problem.id}: "
+            f"[{task.model_uuid[:8]}] {task.problem_id}: "
             f"score_breakdown sum ({expected}) != score_total ({eval_result.score_total}), correcting"
         )
         eval_result.score_total = expected
 
     final_status = "done" if not eval_result.error else "failed"
     await db.update_submission(
-        task.sub_id,
+        task.round_id, task.problem_id, task.model_uuid,
         status=final_status,
         eval_result=json.dumps(asdict(eval_result), ensure_ascii=False),
         total_score=eval_result.score_total,
@@ -319,7 +288,7 @@ async def _run_eval_task(task: EvalTask):
         finished_at=datetime.utcnow().isoformat(),
     )
     logger.info(
-        f"[{task.model_uuid[:8]}] {task.problem.id}: "
+        f"[{task.model_uuid[:8]}] {task.problem_id}: "
         f"compile={'✓' if eval_result.compile_success else '✗'} "
         f"tests={eval_result.tests_passed}/{eval_result.tests_total} "
         f"score={eval_result.score_total}"

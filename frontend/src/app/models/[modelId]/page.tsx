@@ -24,7 +24,7 @@ export default function ModelDetailPage() {
     fetchAPI<Problem[]>("/api/problems")
       .then((list) => {
         const m: Record<string, Problem> = {};
-        list.forEach((p) => { m[p.uuid] = p; });
+        list.forEach((p) => { m[p.id] = p; });
         setProblemMap(m);
       })
       .catch(() => {});

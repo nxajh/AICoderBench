@@ -10,25 +10,24 @@ from datetime import datetime
 from typing import Optional
 
 from .config import DATABASE_URL
-from .utils import clean_thinking as _clean_thinking
-
 
 DB_PATH = DATABASE_URL.replace("sqlite:///", "")
 
-# 模块级共享连接
 _db: Optional[aiosqlite.Connection] = None
 
-# 列名白名单
 VALID_SUBMISSION_COLUMNS = {
-    "status", "generated_code", "raw_output", "used_tool_call",
+    "status", "generated_code", "used_tool_call",
     "generation_error", "eval_result", "total_score", "score_breakdown",
     "created_at", "finished_at", "generation_duration", "token_usage",
-    "model_uuid", "prompt", "agent_round",
+    "agent_round", "generation_history",
 }
 
 VALID_MODEL_COLUMNS = {
-    "api_key", "base_url", "thinking", "enabled", "provider", "model",
-    "provider_type", "name", "max_tokens",
+    "model_id", "thinking", "thinking_budget", "enabled", "max_tokens",
+}
+
+VALID_PROVIDER_COLUMNS = {
+    "name", "api_format", "api_key", "base_url",
 }
 
 
@@ -46,203 +45,249 @@ async def init_db():
     db = await get_db()
     await db.executescript("""
         CREATE TABLE IF NOT EXISTS problems (
-            uuid TEXT NOT NULL,
-            slug TEXT NOT NULL UNIQUE,
-            id TEXT NOT NULL,
-            title TEXT NOT NULL,
-            difficulty TEXT DEFAULT 'medium',
-            language TEXT DEFAULT 'c',
-            tags TEXT DEFAULT '[]',
-            compile_flags TEXT DEFAULT '',
-            timeout_seconds INTEGER DEFAULT 30,
-            scoring TEXT DEFAULT '{}',
-            has_benchmark INTEGER DEFAULT 0,
-            concurrent INTEGER DEFAULT 1,
-            perf_baseline_ms INTEGER DEFAULT 100,
-            PRIMARY KEY (uuid)
+            id               TEXT PRIMARY KEY,
+            title            TEXT NOT NULL,
+            difficulty       TEXT DEFAULT 'medium',
+            language         TEXT DEFAULT 'c',
+            tags             TEXT DEFAULT '[]',
+            compile_flags    TEXT DEFAULT '',
+            timeout_seconds  INTEGER DEFAULT 30,
+            concurrent       INTEGER DEFAULT 1,
+            perf_baseline_ms INTEGER DEFAULT 0,
+            scoring          TEXT DEFAULT '{}'
+        );
+
+        CREATE TABLE IF NOT EXISTS providers (
+            uuid        TEXT PRIMARY KEY,
+            name        TEXT NOT NULL,
+            api_format  TEXT NOT NULL DEFAULT 'openai',
+            api_key     TEXT NOT NULL,
+            base_url    TEXT DEFAULT ''
         );
 
         CREATE TABLE IF NOT EXISTS models (
-            uuid TEXT PRIMARY KEY,
-            provider TEXT NOT NULL,
-            model TEXT NOT NULL,
-            thinking INTEGER DEFAULT 0,
-            name TEXT DEFAULT '',
-            api_key TEXT DEFAULT '',
-            base_url TEXT DEFAULT '',
-            provider_type TEXT NOT NULL,
-            enabled INTEGER DEFAULT 1,
-            max_tokens INTEGER DEFAULT 65536
+            uuid            TEXT PRIMARY KEY,
+            provider_uuid   TEXT NOT NULL REFERENCES providers(uuid),
+            model_id        TEXT NOT NULL,
+            thinking        INTEGER DEFAULT 0,
+            thinking_budget INTEGER DEFAULT 10000,
+            enabled         INTEGER DEFAULT 1,
+            max_tokens      INTEGER DEFAULT 65536
         );
 
         CREATE TABLE IF NOT EXISTS rounds (
-            id TEXT PRIMARY KEY,
-            name TEXT DEFAULT '',
-            status TEXT DEFAULT 'pending',
-            problem_ids TEXT DEFAULT '[]',
-            model_uuids TEXT DEFAULT '[]',
-            created_at TEXT DEFAULT '',
-            finished_at TEXT DEFAULT ''
+            id          TEXT PRIMARY KEY,
+            name        TEXT DEFAULT '',
+            status      TEXT DEFAULT 'pending',
+            problem_ids TEXT NOT NULL,
+            model_uuids TEXT NOT NULL,
+            created_at  TEXT NOT NULL,
+            finished_at TEXT
         );
 
         CREATE TABLE IF NOT EXISTS submissions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            round_id TEXT NOT NULL,
-            problem_id TEXT NOT NULL,
-            model_uuid TEXT NOT NULL,
-            status TEXT DEFAULT 'pending',
-            prompt TEXT DEFAULT '',
-            generated_code TEXT DEFAULT '',
-            raw_output TEXT DEFAULT '',
-            used_tool_call INTEGER DEFAULT 0,
-            generation_error TEXT DEFAULT '',
-            eval_result TEXT DEFAULT '{}',
-            total_score INTEGER DEFAULT 0,
-            score_breakdown TEXT DEFAULT '{}',
-            created_at TEXT DEFAULT '',
-            finished_at TEXT DEFAULT '',
+            round_id            TEXT NOT NULL REFERENCES rounds(id),
+            problem_id          TEXT NOT NULL REFERENCES problems(id),
+            model_uuid          TEXT NOT NULL REFERENCES models(uuid),
+            status              TEXT DEFAULT 'pending',
+            agent_round         INTEGER DEFAULT 0,
+            used_tool_call      INTEGER DEFAULT 0,
+            generated_code      TEXT DEFAULT '',
+            generation_history  TEXT DEFAULT '[]',
             generation_duration REAL DEFAULT 0,
-            token_usage TEXT DEFAULT '{}',
-            UNIQUE(round_id, problem_id, model_uuid)
+            token_usage         TEXT DEFAULT '{}',
+            generation_error    TEXT DEFAULT '',
+            eval_result         TEXT DEFAULT '{}',
+            score_breakdown     TEXT DEFAULT '{}',
+            total_score         INTEGER DEFAULT 0,
+            created_at          TEXT NOT NULL,
+            finished_at         TEXT,
+            PRIMARY KEY (round_id, problem_id, model_uuid)
         );
 
-        CREATE INDEX IF NOT EXISTS idx_submissions_round ON submissions(round_id);
-        CREATE INDEX IF NOT EXISTS idx_submissions_model ON submissions(model_uuid);
-        CREATE INDEX IF NOT EXISTS idx_submissions_problem_status ON submissions(problem_id, status);
-        CREATE INDEX IF NOT EXISTS idx_submissions_model_status ON submissions(model_uuid, status);
+        CREATE INDEX IF NOT EXISTS idx_sub_round   ON submissions(round_id);
+        CREATE INDEX IF NOT EXISTS idx_sub_model   ON submissions(model_uuid);
+        CREATE INDEX IF NOT EXISTS idx_sub_problem ON submissions(problem_id, status);
     """)
 
-    # 启用 WAL 模式提升并发写入安全性
     await db.execute("PRAGMA journal_mode=WAL")
     await db.execute("PRAGMA busy_timeout=5000")
     await db.commit()
 
-    # 迁移：添加 generation_duration 字段（如果不存在）
-    cursor = await db.execute("PRAGMA table_info(submissions)")
-    columns = [row[1] for row in await cursor.fetchall()]
-    if "generation_duration" not in columns:
-        await db.execute("ALTER TABLE submissions ADD COLUMN generation_duration REAL DEFAULT 0")
-    if "token_usage" not in columns:
-        await db.execute("ALTER TABLE submissions ADD COLUMN token_usage TEXT DEFAULT '{}'")
-    if "model_uuid" not in columns:
-        await db.execute("ALTER TABLE submissions ADD COLUMN model_uuid TEXT DEFAULT ''")
-    if "agent_round" not in columns:
-        await db.execute("ALTER TABLE submissions ADD COLUMN agent_round INTEGER DEFAULT 0")
-
-    # 迁移：rounds 表 model_ids → model_uuids
-    cursor = await db.execute("PRAGMA table_info(rounds)")
-    round_columns = [row[1] for row in await cursor.fetchall()]
-    if "model_ids" in round_columns and "model_uuids" not in round_columns:
-        await db.execute("ALTER TABLE rounds RENAME COLUMN model_ids TO model_uuids")
-
-    # 迁移：submissions model_uuid 为空时用 model_id 填充，再删除冗余的 model_id 列
-    # model_id 是旧 schema 的 NOT NULL 字段；不删除会导致新 INSERT 因缺少该列而失败。
-    # 用表重建代替 ALTER TABLE DROP COLUMN，兼容带约束的旧 schema 和所有 SQLite 版本。
-    if "model_id" in columns:
-        await db.execute("UPDATE submissions SET model_uuid = model_id WHERE model_uuid = '' AND model_id != ''")
-        # 重新读取当前列（ADD COLUMN 迁移已执行）
-        cursor2 = await db.execute("PRAGMA table_info(submissions)")
-        current_cols = [row[1] for row in await cursor2.fetchall()]
-        target_cols = {
-            "id", "round_id", "problem_id", "model_uuid", "status", "prompt",
-            "generated_code", "raw_output", "used_tool_call", "generation_error",
-            "eval_result", "total_score", "score_breakdown", "created_at",
-            "finished_at", "generation_duration", "token_usage", "agent_round",
-        }
-        copy_cols = [c for c in current_cols if c in target_cols]
-        cols_str = ", ".join(copy_cols)
-        await db.execute("""
-            CREATE TABLE submissions_new (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                round_id TEXT NOT NULL,
-                problem_id TEXT NOT NULL,
-                model_uuid TEXT NOT NULL,
-                status TEXT DEFAULT 'pending',
-                prompt TEXT DEFAULT '',
-                generated_code TEXT DEFAULT '',
-                raw_output TEXT DEFAULT '',
-                used_tool_call INTEGER DEFAULT 0,
-                generation_error TEXT DEFAULT '',
-                eval_result TEXT DEFAULT '',
-                total_score REAL DEFAULT 0,
-                score_breakdown TEXT DEFAULT '{}',
-                created_at TEXT DEFAULT '',
-                finished_at TEXT DEFAULT '',
-                generation_duration REAL DEFAULT 0,
-                token_usage TEXT DEFAULT '{}',
-                agent_round INTEGER DEFAULT 0,
-                UNIQUE(round_id, problem_id, model_uuid)
-            )
-        """)
-        await db.execute(f"INSERT INTO submissions_new ({cols_str}) SELECT {cols_str} FROM submissions")
-        await db.execute("DROP TABLE submissions")
-        await db.execute("ALTER TABLE submissions_new RENAME TO submissions")
-        await db.execute("CREATE INDEX IF NOT EXISTS idx_submissions_round ON submissions(round_id)")
-        await db.execute("CREATE INDEX IF NOT EXISTS idx_submissions_model ON submissions(model_uuid)")
-        await db.execute("CREATE INDEX IF NOT EXISTS idx_submissions_problem_status ON submissions(problem_id, status)")
-        await db.execute("CREATE INDEX IF NOT EXISTS idx_submissions_model_status ON submissions(model_uuid, status)")
-
-    # 迁移：扩展 models 表
-    cursor = await db.execute("PRAGMA table_info(models)")
-    model_columns = [row[1] for row in await cursor.fetchall()]
-    if "api_key" not in model_columns:
-        await db.execute("ALTER TABLE models ADD COLUMN api_key TEXT DEFAULT ''")
-    if "base_url" not in model_columns:
-        await db.execute("ALTER TABLE models ADD COLUMN base_url TEXT DEFAULT ''")
-    if "provider_type" not in model_columns:
-        await db.execute("ALTER TABLE models ADD COLUMN provider_type TEXT DEFAULT ''")
-    if "enabled" not in model_columns:
-        await db.execute("ALTER TABLE models ADD COLUMN enabled INTEGER DEFAULT 1")
-    if "thinking" not in model_columns:
-        await db.execute("ALTER TABLE models ADD COLUMN thinking INTEGER DEFAULT 0")
-    if "max_tokens" not in model_columns:
-        await db.execute("ALTER TABLE models ADD COLUMN max_tokens INTEGER DEFAULT 65536")
-    if "uuid" not in model_columns:
-        # 旧 schema 用 id 作主键，重命名为 uuid
-        if "id" in model_columns:
-            await db.execute("ALTER TABLE models RENAME COLUMN id TO uuid")
-
-    # 迁移：problems 表加 uuid/slug 及新字段
-    cursor = await db.execute("PRAGMA table_info(problems)")
-    problem_columns = [row[1] for row in await cursor.fetchall()]
-    if "uuid" not in problem_columns:
-        await db.execute("ALTER TABLE problems ADD COLUMN uuid TEXT")
-    if "slug" not in problem_columns:
-        await db.execute("ALTER TABLE problems ADD COLUMN slug TEXT")
-    if "has_benchmark" not in problem_columns:
-        await db.execute("ALTER TABLE problems ADD COLUMN has_benchmark INTEGER DEFAULT 0")
-    if "concurrent" not in problem_columns:
-        await db.execute("ALTER TABLE problems ADD COLUMN concurrent INTEGER DEFAULT 1")
-    if "perf_baseline_ms" not in problem_columns:
-        await db.execute("ALTER TABLE problems ADD COLUMN perf_baseline_ms INTEGER DEFAULT 100")
-    # 为已有记录生成 uuid 和 slug
-    needs_migrate = await db.execute_fetchall("SELECT id FROM problems WHERE uuid IS NULL")
-    for row in needs_migrate:
-        new_uuid = f"p-{uuid.uuid4().hex[:12]}"
-        await db.execute("UPDATE problems SET uuid=?, slug=? WHERE id=?", (new_uuid, row["id"], row["id"]))
-
-    # 迁移：submissions problem_id 从 slug 改为 uuid
-    # 先建立 slug->uuid 映射
-    slug_to_uuid = {}
-    rows = await db.execute_fetchall("SELECT uuid, slug FROM problems WHERE uuid IS NOT NULL AND slug IS NOT NULL")
-    for row in rows:
-        slug_to_uuid[row["slug"]] = row["uuid"]
-    if slug_to_uuid:
-        # 一次性读取所有 rounds，避免在循环内重复查询（N+1 → 1+N）
-        rounds_rows = await db.execute_fetchall("SELECT id, problem_ids FROM rounds")
-        for slug, puuid in slug_to_uuid.items():
-            await db.execute("UPDATE submissions SET problem_id=? WHERE problem_id=?", (puuid, slug))
-            # 更新 rounds 的 problem_ids JSON 数组
-            for rr in rounds_rows:
-                pids = json.loads(rr["problem_ids"])
-                if slug in pids:
-                    pids = [puuid if p == slug else p for p in pids]
-                    await db.execute("UPDATE rounds SET problem_ids=? WHERE id=?", (json.dumps(pids), rr["id"]))
-
-    await db.commit()
-
-    # 首次同步：从文件系统载入题目（startup 时再做全量 upsert）
     await sync_problems_from_disk()
+
+
+# ---- 辅助 ----
+
+def _mask_key(key: str) -> str:
+    if not key or len(key) < 12:
+        return "****" if key else ""
+    return f"{key[:4]}...{key[-4:]}"
+
+
+def _model_info_query() -> str:
+    """返回 models JOIN providers 的公共 SELECT 片段"""
+    return """
+        SELECT m.uuid, m.model_id, m.thinking, m.thinking_budget, m.enabled, m.max_tokens,
+               p.uuid as provider_uuid, p.name as provider_name, p.api_format
+        FROM models m JOIN providers p ON m.provider_uuid = p.uuid
+    """
+
+
+# ---- Provider 操作 ----
+
+async def list_providers() -> list[dict]:
+    db = await get_db()
+    async with db.execute("SELECT * FROM providers ORDER BY name") as cur:
+        rows = await cur.fetchall()
+    result = []
+    for row in rows:
+        d = dict(row)
+        d["api_key_masked"] = _mask_key(d.get("api_key", ""))
+        d.pop("api_key", None)
+        result.append(d)
+    return result
+
+
+async def get_provider(provider_uuid: str) -> Optional[dict]:
+    """获取 provider 完整信息（含 api_key，仅内部使用）"""
+    db = await get_db()
+    async with db.execute("SELECT * FROM providers WHERE uuid=?", (provider_uuid,)) as cur:
+        row = await cur.fetchone()
+    return dict(row) if row else None
+
+
+async def create_provider(name: str, api_format: str, api_key: str, base_url: str = "") -> dict:
+    new_uuid = str(uuid.uuid4())
+    db = await get_db()
+    await db.execute(
+        "INSERT INTO providers (uuid, name, api_format, api_key, base_url) VALUES (?, ?, ?, ?, ?)",
+        (new_uuid, name, api_format, api_key, base_url)
+    )
+    await db.commit()
+    return {"uuid": new_uuid}
+
+
+async def update_provider(provider_uuid: str, **kwargs) -> bool:
+    invalid = set(kwargs.keys()) - VALID_PROVIDER_COLUMNS
+    if invalid:
+        raise ValueError(f"Invalid columns: {invalid}")
+    if "api_key" in kwargs and not kwargs["api_key"]:
+        del kwargs["api_key"]
+    if not kwargs:
+        return True
+    sets = ", ".join(f"{k}=?" for k in kwargs)
+    values = list(kwargs.values()) + [provider_uuid]
+    db = await get_db()
+    cur = await db.execute(f"UPDATE providers SET {sets} WHERE uuid=?", values)
+    await db.commit()
+    return cur.rowcount > 0
+
+
+async def delete_provider(provider_uuid: str) -> bool:
+    db = await get_db()
+    # 级联删除该 provider 下的所有 models
+    await db.execute("DELETE FROM models WHERE provider_uuid=?", (provider_uuid,))
+    cur = await db.execute("DELETE FROM providers WHERE uuid=?", (provider_uuid,))
+    await db.commit()
+    return cur.rowcount > 0
+
+
+# ---- Model 操作 ----
+
+async def list_model_configs() -> list[dict]:
+    """返回所有模型配置（含 provider 信息，api_key 掩码）"""
+    db = await get_db()
+    async with db.execute(
+        _model_info_query() + " ORDER BY p.name, m.model_id"
+    ) as cur:
+        rows = await cur.fetchall()
+    result = []
+    for row in rows:
+        d = dict(row)
+        d["thinking"] = bool(d["thinking"])
+        d["enabled"] = bool(d["enabled"])
+        result.append(d)
+    return result
+
+
+async def get_model_config(model_uuid: str) -> Optional[dict]:
+    """获取模型完整配置（含 provider api_key，仅内部使用）"""
+    db = await get_db()
+    async with db.execute(
+        """SELECT m.uuid, m.model_id, m.thinking, m.thinking_budget, m.enabled, m.max_tokens,
+                  p.uuid as provider_uuid, p.name as provider_name,
+                  p.api_format, p.api_key, p.base_url
+           FROM models m JOIN providers p ON m.provider_uuid = p.uuid
+           WHERE m.uuid=?""",
+        (model_uuid,)
+    ) as cur:
+        row = await cur.fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    d["thinking"] = bool(d["thinking"])
+    d["enabled"] = bool(d["enabled"])
+    return d
+
+
+async def create_model_config(
+    provider_uuid: str, model_id: str,
+    thinking: bool = False, thinking_budget: int = 10000,
+    enabled: bool = True, max_tokens: int = 65536,
+) -> dict:
+    new_uuid = str(uuid.uuid4())
+    db = await get_db()
+    await db.execute(
+        """INSERT INTO models (uuid, provider_uuid, model_id, thinking, thinking_budget, enabled, max_tokens)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (new_uuid, provider_uuid, model_id, int(thinking), thinking_budget, int(enabled), max_tokens)
+    )
+    await db.commit()
+    return {"uuid": new_uuid}
+
+
+async def update_model_config(model_uuid: str, **kwargs) -> bool:
+    invalid = set(kwargs.keys()) - VALID_MODEL_COLUMNS
+    if invalid:
+        raise ValueError(f"Invalid columns: {invalid}")
+    if "thinking" in kwargs:
+        kwargs["thinking"] = int(kwargs["thinking"])
+    if "enabled" in kwargs:
+        kwargs["enabled"] = int(kwargs["enabled"])
+    if not kwargs:
+        return True
+    sets = ", ".join(f"{k}=?" for k in kwargs)
+    values = list(kwargs.values()) + [model_uuid]
+    db = await get_db()
+    cur = await db.execute(f"UPDATE models SET {sets} WHERE uuid=?", values)
+    await db.commit()
+    return cur.rowcount > 0
+
+
+async def delete_model_config(model_uuid: str) -> bool:
+    db = await get_db()
+    cur = await db.execute("DELETE FROM models WHERE uuid=?", (model_uuid,))
+    await db.commit()
+    return cur.rowcount > 0
+
+
+async def list_enabled_models() -> list[dict]:
+    """获取所有已启用模型（含 provider 信息），用于评测选择"""
+    db = await get_db()
+    async with db.execute(
+        _model_info_query() + " WHERE m.enabled=1 ORDER BY p.name, m.model_id"
+    ) as cur:
+        rows = await cur.fetchall()
+    return [
+        {
+            "uuid": row["uuid"],
+            "provider_name": row["provider_name"],
+            "model_id": row["model_id"],
+            "thinking": bool(row["thinking"]),
+        }
+        for row in rows
+    ]
 
 
 # ---- Round 操作 ----
@@ -259,110 +304,68 @@ async def create_round(round_id: str, problem_ids: list[str], model_uuids: list[
 
 
 async def update_round_status(round_id: str, status: str):
-    now = datetime.utcnow().isoformat() if status in ("done", "failed") else ""
     db = await get_db()
-    if now:
+    if status in ("done", "failed"):
+        now = datetime.utcnow().isoformat()
         await db.execute("UPDATE rounds SET status=?, finished_at=? WHERE id=?", (status, now, round_id))
     else:
         await db.execute("UPDATE rounds SET status=? WHERE id=?", (status, round_id))
     await db.commit()
 
 
-async def delete_round(round_id: str):
-    db = await get_db()
-    await db.execute("DELETE FROM submissions WHERE round_id=?", (round_id,))
-    await db.execute("DELETE FROM rounds WHERE id=?", (round_id,))
-    await db.commit()
-
-
 async def get_round(round_id: str) -> Optional[dict]:
     db = await get_db()
-    async with db.execute("SELECT * FROM rounds WHERE id=?", (round_id,)) as cursor:
-        row = await cursor.fetchone()
-        if not row:
-            return None
-        d = dict(row)
-        d["problem_ids"] = json.loads(d["problem_ids"])
-        d["model_uuids"] = json.loads(d.get("model_uuids", "[]"))
-        return d
+    async with db.execute("SELECT * FROM rounds WHERE id=?", (round_id,)) as cur:
+        row = await cur.fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    d["problem_ids"] = json.loads(d["problem_ids"])
+    d["model_uuids"] = json.loads(d["model_uuids"])
+    return d
 
 
 async def list_rounds() -> list[dict]:
     db = await get_db()
-    async with db.execute("SELECT * FROM rounds ORDER BY created_at DESC") as cursor:
-        rows = await cursor.fetchall()
-        result = []
-        for row in rows:
-            d = dict(row)
-            d["problem_ids"] = json.loads(d["problem_ids"])
-            d["model_uuids"] = json.loads(d.get("model_uuids", "[]"))
-            result.append(d)
-        return result
+    async with db.execute("SELECT * FROM rounds ORDER BY created_at DESC") as cur:
+        rows = await cur.fetchall()
+    result = []
+    for row in rows:
+        d = dict(row)
+        d["problem_ids"] = json.loads(d["problem_ids"])
+        d["model_uuids"] = json.loads(d["model_uuids"])
+        result.append(d)
+    return result
 
 
 # ---- Submission 操作 ----
 
-async def create_submission(round_id: str, problem_id: str, model_uuid: str) -> int:
+async def create_submission(round_id: str, problem_id: str, model_uuid: str):
     now = datetime.utcnow().isoformat()
     db = await get_db()
-    cur = await db.execute(
-        "SELECT id FROM submissions WHERE round_id=? AND problem_id=? AND model_uuid=?",
-        (round_id, problem_id, model_uuid)
-    )
-    row = await cur.fetchone()
-    await cur.close()
-    if row:
-        return row[0]
-    cur = await db.execute(
-        "INSERT INTO submissions (round_id, problem_id, model_uuid, status, created_at) VALUES (?, ?, ?, 'pending', ?)",
+    await db.execute(
+        """INSERT OR IGNORE INTO submissions
+           (round_id, problem_id, model_uuid, status, created_at)
+           VALUES (?, ?, ?, 'pending', ?)""",
         (round_id, problem_id, model_uuid, now)
     )
     await db.commit()
-    return cur.lastrowid
 
 
-async def update_submission(submission_id: int, **kwargs):
+async def update_submission(round_id: str, problem_id: str, model_uuid: str, **kwargs):
     if not kwargs:
         return
     invalid = set(kwargs.keys()) - VALID_SUBMISSION_COLUMNS
     if invalid:
         raise ValueError(f"Invalid columns: {invalid}")
     sets = ", ".join(f"{k}=?" for k in kwargs)
-    values = list(kwargs.values()) + [submission_id]
+    values = list(kwargs.values()) + [round_id, problem_id, model_uuid]
     db = await get_db()
-    await db.execute(f"UPDATE submissions SET {sets} WHERE id=?", values)
+    await db.execute(
+        f"UPDATE submissions SET {sets} WHERE round_id=? AND problem_id=? AND model_uuid=?",
+        values
+    )
     await db.commit()
-
-
-async def get_submissions_by_round(round_id: str) -> list[dict]:
-    db = await get_db()
-    async with db.execute(
-        "SELECT * FROM submissions WHERE round_id=? ORDER BY problem_id, model_uuid",
-        (round_id,)
-    ) as cursor:
-        rows = await cursor.fetchall()
-        result = []
-        for row in rows:
-            d = dict(row)
-            if d.get("eval_result"):
-                d["eval_result"] = json.loads(d["eval_result"])
-            if d.get("score_breakdown"):
-                d["score_breakdown"] = json.loads(d["score_breakdown"])
-            d["used_tool_call"] = bool(d.get("used_tool_call", 0))
-            result.append(d)
-        return result
-
-
-
-async def get_round_progress(round_id: str) -> list[dict]:
-    """轻量级进度查询：仅返回状态字段，供前端高频轮询使用"""
-    db = await get_db()
-    async with db.execute(
-        "SELECT model_uuid, problem_id, status, agent_round, total_score FROM submissions WHERE round_id=?",
-        (round_id,)
-    ) as cursor:
-        rows = await cursor.fetchall()
-    return [dict(r) for r in rows]
 
 
 async def get_submission(round_id: str, problem_id: str, model_uuid: str) -> Optional[dict]:
@@ -370,79 +373,160 @@ async def get_submission(round_id: str, problem_id: str, model_uuid: str) -> Opt
     async with db.execute(
         "SELECT * FROM submissions WHERE round_id=? AND problem_id=? AND model_uuid=?",
         (round_id, problem_id, model_uuid)
-    ) as cursor:
-        row = await cursor.fetchone()
-        if not row:
-            return None
-        d = dict(row)
-        d.pop("prompt", None)
-        # 解析 generation history
-        if d.get("raw_output"):
-            try:
-                history = json.loads(d["raw_output"])
-                # 对 history 做思考和输出分离
-                for h in history:
-                    # 旧格式：只有 text_preview
-                    if "thinking" not in h and "text_preview" in h:
-                        tp = h["text_preview"] or ""
-                        if "</think" in tp:
-                            idx = tp.find("</think")
-                            end = tp.find(">", idx)
-                            if end >= 0:
-                                h["thinking"] = _clean_thinking(tp[:idx].strip())
-                                h["output"] = tp[end+1:].strip()
-                            else:
-                                h["output"] = tp
-                                h["thinking"] = ""
-                        elif "\u200b" in tp[:5]:
-                            h["thinking"] = _clean_thinking(tp)
-                            h["output"] = ""
-                        elif "\n\n\n" in tp:
-                            parts = tp.split("\n\n\n", 1)
-                            h["thinking"] = _clean_thinking(parts[0].strip())
-                            h["output"] = parts[1].strip()
-                        else:
-                            h["output"] = tp
-                            h["thinking"] = ""
-                    # 中间格式：有 thinking 但包含 </think（拆分不完整）
-                    elif "thinking" in h and "</think" in (h.get("thinking") or ""):
-                        combined = h["thinking"] or ""
-                        idx = combined.find("</think")
-                        end = combined.find(">", idx)
-                        if end >= 0:
-                            rest = combined[end+1:].strip()
-                            if rest:
-                                h["thinking"] = _clean_thinking(combined[:idx].strip())
-                                h["output"] = rest
-                d["generation_history"] = history
-            except (json.JSONDecodeError, TypeError):
-                d["generation_history"] = []
-        else:
-            d["generation_history"] = []
-        d.pop("raw_output", None)
-        if d.get("eval_result"):
-            d["eval_result"] = json.loads(d["eval_result"])
-        if d.get("score_breakdown"):
-            d["score_breakdown"] = json.loads(d["score_breakdown"])
-        d["used_tool_call"] = bool(d.get("used_tool_call", 0))
-        if d.get("token_usage") and isinstance(d["token_usage"], str):
-            d["token_usage"] = json.loads(d["token_usage"])
-    # 附上 model 元信息
-    async with db.execute(
-        "SELECT provider, model, thinking FROM models WHERE uuid=?", (model_uuid,)
     ) as cur:
-        minfo = await cur.fetchone()
-        if minfo:
-            d["model_provider"] = minfo["provider"]
-            d["model_name"] = minfo["model"]
-            d["model_thinking"] = bool(minfo["thinking"])
+        row = await cur.fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    d["used_tool_call"] = bool(d.get("used_tool_call", 0))
+    if d.get("generation_history"):
+        try:
+            d["generation_history"] = json.loads(d["generation_history"])
+        except (json.JSONDecodeError, TypeError):
+            d["generation_history"] = []
+    else:
+        d["generation_history"] = []
+    if d.get("eval_result"):
+        try:
+            d["eval_result"] = json.loads(d["eval_result"])
+        except (json.JSONDecodeError, TypeError):
+            d["eval_result"] = {}
+    if d.get("score_breakdown"):
+        try:
+            d["score_breakdown"] = json.loads(d["score_breakdown"])
+        except (json.JSONDecodeError, TypeError):
+            d["score_breakdown"] = {}
+    if d.get("token_usage") and isinstance(d["token_usage"], str):
+        try:
+            d["token_usage"] = json.loads(d["token_usage"])
+        except (json.JSONDecodeError, TypeError):
+            d["token_usage"] = {}
+
+    # 附上 model + provider 元信息
+    cfg = await get_model_config(model_uuid)
+    if cfg:
+        d["model_name"] = cfg["model_id"]
+        d["model_provider"] = cfg["provider_name"]
+        d["model_thinking"] = cfg["thinking"]
     return d
 
 
-# ---- Global Leaderboard ----
+async def get_submissions_by_round(round_id: str) -> list[dict]:
+    db = await get_db()
+    async with db.execute(
+        "SELECT * FROM submissions WHERE round_id=? ORDER BY problem_id, model_uuid",
+        (round_id,)
+    ) as cur:
+        rows = await cur.fetchall()
+    result = []
+    for row in rows:
+        d = dict(row)
+        d["used_tool_call"] = bool(d.get("used_tool_call", 0))
+        if d.get("eval_result"):
+            try:
+                d["eval_result"] = json.loads(d["eval_result"])
+            except (json.JSONDecodeError, TypeError):
+                d["eval_result"] = {}
+        if d.get("score_breakdown"):
+            try:
+                d["score_breakdown"] = json.loads(d["score_breakdown"])
+            except (json.JSONDecodeError, TypeError):
+                d["score_breakdown"] = {}
+        result.append(d)
+    return result
+
+
+async def get_round_progress(round_id: str) -> list[dict]:
+    db = await get_db()
+    async with db.execute(
+        "SELECT model_uuid, problem_id, status, agent_round, total_score FROM submissions WHERE round_id=?",
+        (round_id,)
+    ) as cur:
+        rows = await cur.fetchall()
+    return [dict(r) for r in rows]
+
+
+# ---- Leaderboard ----
+
+async def _get_model_display_map() -> dict:
+    """返回 {model_uuid: {provider_name, model_id, thinking}} 用于排行榜展示"""
+    db = await get_db()
+    async with db.execute(
+        "SELECT m.uuid, m.model_id, m.thinking, p.name as provider_name FROM models m JOIN providers p ON m.provider_uuid=p.uuid"
+    ) as cur:
+        rows = await cur.fetchall()
+    return {r["uuid"]: {"provider_name": r["provider_name"], "model_id": r["model_id"], "thinking": bool(r["thinking"])} for r in rows}
+
+
+async def get_leaderboard(round_id: str) -> list[dict]:
+    db = await get_db()
+    async with db.execute(
+        """SELECT model_uuid,
+                  COUNT(*) as total_problems,
+                  SUM(total_score) as total_score,
+                  SUM(CASE WHEN status='done' THEN 1 ELSE 0 END) as completed,
+                  AVG(total_score) as avg_score
+           FROM submissions WHERE round_id=?
+           GROUP BY model_uuid ORDER BY total_score DESC""",
+        (round_id,)
+    ) as cur:
+        rows = await cur.fetchall()
+
+    model_map = await _get_model_display_map()
+    result = []
+    for row in rows:
+        muuid = row["model_uuid"]
+        info = model_map.get(muuid, {})
+        result.append({
+            "model_uuid": muuid,
+            "provider": info.get("provider_name", ""),
+            "model": info.get("model_id", muuid[:8]),
+            "thinking": info.get("thinking", False),
+            "total_problems": row["total_problems"],
+            "total_score": row["total_score"] or 0,
+            "completed": row["completed"],
+            "avg_score": round(row["avg_score"] or 0, 1),
+        })
+    return result
+
+
+async def get_leaderboards_for_rounds(round_ids: list[str]) -> dict[str, list[dict]]:
+    if not round_ids:
+        return {}
+    db = await get_db()
+    placeholders = ",".join("?" for _ in round_ids)
+    async with db.execute(
+        f"""SELECT model_uuid, round_id,
+                  COUNT(*) as total_problems,
+                  SUM(total_score) as total_score,
+                  SUM(CASE WHEN status='done' THEN 1 ELSE 0 END) as completed,
+                  AVG(total_score) as avg_score
+           FROM submissions WHERE round_id IN ({placeholders})
+           GROUP BY round_id, model_uuid ORDER BY round_id, total_score DESC""",
+        round_ids
+    ) as cur:
+        rows = await cur.fetchall()
+
+    model_map = await _get_model_display_map()
+    result: dict[str, list[dict]] = {rid: [] for rid in round_ids}
+    for row in rows:
+        muuid = row["model_uuid"]
+        rid = row["round_id"]
+        info = model_map.get(muuid, {})
+        result[rid].append({
+            "model_uuid": muuid,
+            "provider": info.get("provider_name", ""),
+            "model": info.get("model_id", muuid[:8]),
+            "thinking": info.get("thinking", False),
+            "total_problems": row["total_problems"],
+            "total_score": row["total_score"] or 0,
+            "completed": row["completed"],
+            "avg_score": round(row["avg_score"] or 0, 1),
+        })
+    return result
+
 
 async def get_global_leaderboard() -> list[dict]:
-    """跨所有 rounds 聚合的模型排行榜"""
     db = await get_db()
     async with db.execute("""
         SELECT model_uuid,
@@ -452,21 +536,17 @@ async def get_global_leaderboard() -> list[dict]:
         FROM submissions
         WHERE status='done'
         GROUP BY model_uuid, problem_id
-    """) as cursor:
-        problem_rows = await cursor.fetchall()
+    """) as cur:
+        problem_rows = await cur.fetchall()
 
-    # 获取每个模型的总 token 用量
-    token_data: dict = {}
     async with db.execute("""
         SELECT model_uuid,
                SUM(CASE WHEN token_usage IS NOT NULL AND token_usage != '' AND token_usage != '{}'
                    THEN json_extract(token_usage, '$.total_tokens') ELSE 0 END) as total_tokens
-        FROM submissions
-        WHERE status='done'
+        FROM submissions WHERE status='done'
         GROUP BY model_uuid
     """) as cur:
-        for r in await cur.fetchall():
-            token_data[r["model_uuid"]] = r["total_tokens"] or 0
+        token_data = {r["model_uuid"]: r["total_tokens"] or 0 for r in await cur.fetchall()}
 
     model_data: dict = {}
     for row in problem_rows:
@@ -477,22 +557,18 @@ async def get_global_leaderboard() -> list[dict]:
         model_data[muuid]["problems"].append(row["best_score"])
         model_data[muuid]["total_subs"] += row["sub_count"]
 
-    model_info: dict = {}
-    async with db.execute("SELECT uuid, provider, model, thinking FROM models") as cur:
-        for r in await cur.fetchall():
-            model_info[r["uuid"]] = dict(r)
-
+    model_map = await _get_model_display_map()
     result = []
     for muuid, d in model_data.items():
         probs = d["problems"]
         n = len(probs)
         win_count = sum(1 for s in probs if s >= 80)
-        info = model_info.get(muuid, {})
+        info = model_map.get(muuid, {})
         result.append({
             "model_uuid": muuid,
-            "provider": info.get("provider", ""),
-            "model": info.get("model", ""),
-            "thinking": bool(info.get("thinking", 0)),
+            "provider": info.get("provider_name", ""),
+            "model": info.get("model_id", muuid[:8]),
+            "thinking": info.get("thinking", False),
             "total_score": d["total_score"],
             "problems_attempted": n,
             "avg_score": round(sum(probs) / n, 1) if n else 0,
@@ -500,28 +576,97 @@ async def get_global_leaderboard() -> list[dict]:
             "total_submissions": d["total_subs"],
             "total_tokens": token_data.get(muuid, 0),
         })
-
     result.sort(key=lambda x: x["total_score"], reverse=True)
     return result
 
 
+async def get_problem_leaderboard(problem_id: str, limit: int = 10) -> list[dict]:
+    db = await get_db()
+    async with db.execute("""
+        SELECT model_uuid,
+               MAX(total_score) as best_score,
+               AVG(total_score) as avg_score,
+               COUNT(*) as submissions
+        FROM submissions
+        WHERE problem_id=? AND status='done'
+        GROUP BY model_uuid
+        ORDER BY best_score DESC
+        LIMIT ?
+    """, (problem_id, limit)) as cur:
+        rows = await cur.fetchall()
+
+    model_map = await _get_model_display_map()
+
+    if rows:
+        model_uuids_str = ",".join("?" for _ in rows)
+        async with db.execute(
+            f"""
+            SELECT model_uuid, round_id, token_usage, generation_duration, generation_history
+            FROM (
+                SELECT model_uuid, round_id, token_usage, generation_duration, generation_history,
+                       ROW_NUMBER() OVER (PARTITION BY model_uuid ORDER BY total_score DESC) as rn
+                FROM submissions
+                WHERE problem_id=? AND status='done'
+                  AND model_uuid IN ({model_uuids_str})
+            ) WHERE rn = 1
+            """,
+            [problem_id] + [r["model_uuid"] for r in rows]
+        ) as bcur:
+            best_rows = {r["model_uuid"]: r for r in await bcur.fetchall()}
+    else:
+        best_rows = {}
+
+    result = []
+    for row in rows:
+        muuid = row["model_uuid"]
+        info = model_map.get(muuid, {})
+        brow = best_rows.get(muuid)
+        best_round_id = brow["round_id"] if brow else ""
+        best_tokens, best_duration, best_rounds = 0, 0.0, 0
+        if brow:
+            tu = brow["token_usage"]
+            if tu:
+                try:
+                    best_tokens = json.loads(tu).get("total_tokens", 0)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            best_duration = brow["generation_duration"] or 0
+            hist = brow["generation_history"]
+            if hist:
+                try:
+                    best_rounds = len(json.loads(hist))
+                except (json.JSONDecodeError, TypeError):
+                    pass
+        result.append({
+            "model_uuid": muuid,
+            "provider": info.get("provider_name", ""),
+            "model": info.get("model_id", muuid[:8]),
+            "thinking": info.get("thinking", False),
+            "best_score": row["best_score"],
+            "total_tokens": best_tokens,
+            "duration": round(best_duration, 1),
+            "rounds": best_rounds,
+            "best_round_id": best_round_id,
+        })
+    return result
+
+
 async def get_model_stats(model_uuid: str) -> Optional[dict]:
-    """获取某个模型在各题目上的详细统计"""
     db = await get_db()
     async with db.execute(
-        "SELECT COUNT(*) FROM submissions WHERE model_uuid=?", (model_uuid,)
+        "SELECT COUNT(*) as cnt FROM submissions WHERE model_uuid=?", (model_uuid,)
     ) as cur:
-        count = (await cur.fetchone())[0]
-    if count == 0:
+        row = await cur.fetchone()
+    if not row or row["cnt"] == 0:
         return None
 
-    async with db.execute("SELECT uuid, provider, model, thinking FROM models WHERE uuid=?", (model_uuid,)) as cur:
-        info = dict(await cur.fetchone())
+    cfg = await get_model_config(model_uuid)
+    if not cfg:
+        return None
 
-    async with db.execute("SELECT uuid, title FROM problems") as cur:
-        title_map = {r["uuid"]: r["title"] async for r in cur}
+    async with db.execute("SELECT id, title FROM problems") as cur:
+        title_map = {r["id"]: r["title"] async for r in cur}
 
-    # 单次查询获取所有题目的分数统计
     async with db.execute("""
         SELECT problem_id,
                MAX(total_score) as best_score,
@@ -530,20 +675,17 @@ async def get_model_stats(model_uuid: str) -> Optional[dict]:
                COUNT(*) as submission_count
         FROM submissions
         WHERE model_uuid=? AND status='done'
-        GROUP BY problem_id
-        ORDER BY problem_id
-    """, (model_uuid,)) as cursor:
-        rows = await cursor.fetchall()
+        GROUP BY problem_id ORDER BY problem_id
+    """, (model_uuid,)) as cur:
+        rows = await cur.fetchall()
 
-    # 单次查询获取所有题目的 token 用量（避免 N+1）
     async with db.execute("""
         SELECT problem_id, token_usage
         FROM submissions
         WHERE model_uuid=? AND status='done' AND token_usage IS NOT NULL AND token_usage != '' AND token_usage != '{}'
-    """, (model_uuid,)) as tcur:
-        all_token_rows = await tcur.fetchall()
+    """, (model_uuid,)) as cur:
+        all_token_rows = await cur.fetchall()
 
-    # 按 problem_id 聚合 token 数据
     token_sums: dict = {}
     for tr in all_token_rows:
         pid = tr["problem_id"]
@@ -581,306 +723,17 @@ async def get_model_stats(model_uuid: str) -> Optional[dict]:
 
     return {
         "model_uuid": model_uuid,
-        "provider": info.get("provider", ""),
-        "model": info.get("model", ""),
-        "thinking": bool(info.get("thinking", 0)),
+        "provider": cfg["provider_name"],
+        "model": cfg["model_id"],
+        "thinking": cfg["thinking"],
         "problems": problems,
     }
-
-
-# ---- Leaderboard ----
-
-async def get_leaderboard(round_id: str) -> list[dict]:
-    """按模型汇总分数，返回排行榜"""
-    db = await get_db()
-    async with db.execute(
-        """SELECT model_uuid,
-                  COUNT(*) as total_problems,
-                  SUM(total_score) as total_score,
-                  SUM(CASE WHEN status='done' THEN 1 ELSE 0 END) as completed,
-                  AVG(total_score) as avg_score
-           FROM submissions WHERE round_id=?
-           GROUP BY model_uuid ORDER BY total_score DESC""",
-        (round_id,)
-    ) as cursor:
-        rows = await cursor.fetchall()
-
-    model_info: dict = {}
-    async with db.execute("SELECT uuid, provider, model, thinking FROM models") as cur:
-        for r in await cur.fetchall():
-            model_info[r["uuid"]] = dict(r)
-
-    result = []
-    for row in rows:
-        muuid = row["model_uuid"]
-        info = model_info.get(muuid, {})
-        result.append({
-            "model_uuid": muuid,
-            "provider": info.get("provider", ""),
-            "model": info.get("model", ""),
-            "thinking": bool(info.get("thinking", 0)),
-            "total_problems": row["total_problems"],
-            "total_score": row["total_score"] or 0,
-            "completed": row["completed"],
-            "avg_score": round(row["avg_score"] or 0, 1),
-        })
-    return result
-
-
-async def get_leaderboards_for_rounds(round_ids: list[str]) -> dict[str, list[dict]]:
-    """批量获取多个 round 的排行榜"""
-    if not round_ids:
-        return {}
-    db = await get_db()
-    placeholders = ",".join("?" for _ in round_ids)
-    async with db.execute(
-        f"""SELECT model_uuid, round_id,
-                  COUNT(*) as total_problems,
-                  SUM(total_score) as total_score,
-                  SUM(CASE WHEN status='done' THEN 1 ELSE 0 END) as completed,
-                  AVG(total_score) as avg_score
-           FROM submissions WHERE round_id IN ({placeholders})
-           GROUP BY round_id, model_uuid
-           ORDER BY round_id, total_score DESC""",
-        round_ids
-    ) as cursor:
-        rows = await cursor.fetchall()
-
-    model_info: dict = {}
-    async with db.execute("SELECT uuid, provider, model, thinking FROM models") as cur:
-        for r in await cur.fetchall():
-            model_info[r["uuid"]] = dict(r)
-
-    result: dict[str, list[dict]] = {rid: [] for rid in round_ids}
-    for row in rows:
-        muuid = row["model_uuid"]
-        rid = row["round_id"]
-        info = model_info.get(muuid, {})
-        result[rid].append({
-            "model_uuid": muuid,
-            "provider": info.get("provider", ""),
-            "model": info.get("model", ""),
-            "thinking": bool(info.get("thinking", 0)),
-            "total_problems": row["total_problems"],
-            "total_score": row["total_score"] or 0,
-            "completed": row["completed"],
-            "avg_score": round(row["avg_score"] or 0, 1),
-        })
-    return result
-
-
-async def get_problem_leaderboard(problem_id: str, limit: int = 10) -> list[dict]:
-    """获取某题目的模型排行榜（按最高分排序），附带最佳提交的 round_id 和 token"""
-    db = await get_db()
-    async with db.execute("""
-        SELECT model_uuid,
-               MAX(total_score) as best_score,
-               AVG(total_score) as avg_score,
-               COUNT(*) as submissions
-        FROM submissions
-        WHERE problem_id=? AND status='done'
-        GROUP BY model_uuid
-        ORDER BY best_score DESC
-        LIMIT ?
-    """, (problem_id, limit)) as cursor:
-        rows = await cursor.fetchall()
-
-    model_info: dict = {}
-    async with db.execute("SELECT uuid, provider, model, thinking FROM models") as cur:
-        for r in await cur.fetchall():
-            model_info[r["uuid"]] = dict(r)
-
-    # 单次查询获取每个模型的最佳提交详情（按 total_score DESC 取第一条）
-    # 用 ROW_NUMBER 窗口函数避免 N+1
-    if rows:
-        model_uuids_str = ",".join("?" for _ in rows)
-        async with db.execute(
-            f"""
-            SELECT model_uuid, round_id, token_usage, generation_duration, raw_output
-            FROM (
-                SELECT model_uuid, round_id, token_usage, generation_duration, raw_output,
-                       ROW_NUMBER() OVER (PARTITION BY model_uuid ORDER BY total_score DESC) as rn
-                FROM submissions
-                WHERE problem_id=? AND status='done'
-                  AND model_uuid IN ({model_uuids_str})
-            ) WHERE rn = 1
-            """,
-            [problem_id] + [r["model_uuid"] for r in rows]
-        ) as bcur:
-            best_rows = {r["model_uuid"]: r for r in await bcur.fetchall()}
-    else:
-        best_rows = {}
-
-    result = []
-    for row in rows:
-        muuid = row["model_uuid"]
-        info = model_info.get(muuid, {})
-        brow = best_rows.get(muuid)
-        best_round_id = brow["round_id"] if brow else ""
-        best_tokens = 0
-        best_duration = 0.0
-        best_rounds = 0
-        if brow:
-            tu = brow["token_usage"]
-            if tu:
-                try:
-                    best_tokens = json.loads(tu).get("total_tokens", 0)
-                except (json.JSONDecodeError, TypeError):
-                    pass
-            best_duration = brow["generation_duration"] or 0
-            raw = brow["raw_output"]
-            if raw:
-                try:
-                    best_rounds = len(json.loads(raw))
-                except (json.JSONDecodeError, TypeError):
-                    pass
-        result.append({
-            "model_uuid": muuid,
-            "provider": info.get("provider", ""),
-            "model": info.get("model", ""),
-            "thinking": bool(info.get("thinking", 0)),
-            "best_score": row["best_score"],
-            "total_tokens": best_tokens,
-            "duration": round(best_duration, 1),
-            "rounds": best_rounds,
-            "best_round_id": best_round_id,
-        })
-    return result
-
-
-# ---- Model 管理 ----
-
-async def list_model_configs() -> list[dict]:
-    """返回所有模型配置（api_key 掩码处理）"""
-    db = await get_db()
-    async with db.execute("SELECT * FROM models ORDER BY provider, model") as cursor:
-        rows = await cursor.fetchall()
-        result = []
-        for row in rows:
-            d = dict(row)
-            d["api_key_masked"] = _mask_key(d.get("api_key", ""))
-            d.pop("api_key", None)
-            d.pop("name", None)
-            d["enabled"] = bool(d.get("enabled", 1))
-            d["thinking"] = bool(d.get("thinking", 0))
-            result.append(d)
-        return result
-
-
-async def get_model_config(uuid: str) -> Optional[dict]:
-    """获取模型完整配置（含 api_key，仅内部使用）"""
-    db = await get_db()
-    async with db.execute("SELECT * FROM models WHERE uuid=?", (uuid,)) as cursor:
-        row = await cursor.fetchone()
-        if not row:
-            return None
-        d = dict(row)
-        d["enabled"] = bool(d.get("enabled", 1))
-        d["thinking"] = bool(d.get("thinking", 0))
-        d.pop("name", None)
-        d.pop("provider_type", None)
-        return d
-
-
-async def get_model_by_provider_model(provider_type: str, model: str, thinking: bool) -> Optional[dict]:
-    """根据 provider_type + model + thinking 查找模型"""
-    db = await get_db()
-    async with db.execute(
-        "SELECT * FROM models WHERE provider_type=? AND model=? AND thinking=?",
-        (provider_type, model, int(thinking))
-    ) as cursor:
-        row = await cursor.fetchone()
-        if not row:
-            return None
-        d = dict(row)
-        d["enabled"] = bool(d.get("enabled", 1))
-        d["thinking"] = bool(d.get("thinking", 0))
-        d.pop("name", None)
-        d.pop("provider_type", None)
-        return d
-
-
-_PROVIDER_DEFAULT_DISPLAY = {
-    "glm": "GLM", "kimi": "Kimi", "minimax": "MiniMax",
-    "openrouter": "OpenRouter", "openai": "OpenAI",
-}
-
-
-async def create_model_config(
-    provider_type: str, model: str, api_key: str, base_url: str = "",
-    thinking: bool = False, display_name: str = "", max_tokens: int = 65536,
-) -> dict:
-    """创建模型配置，自动生成 UUID。
-    provider_type: 技术类型（决定用哪个 API 类）
-    display_name:  UI 显示名，留空则从 provider_type 推断
-    max_tokens:    API 生成上限，按 provider 实际限制设置（如 Dashscope 最大 65536）
-    """
-    badge_name = display_name.strip() or _PROVIDER_DEFAULT_DISPLAY.get(provider_type, provider_type)
-    new_uuid = str(uuid.uuid4())
-    db = await get_db()
-    await db.execute(
-        "INSERT INTO models (uuid, provider, model, thinking, api_key, base_url, provider_type, enabled, max_tokens) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)",
-        (new_uuid, badge_name, model, int(thinking), api_key, base_url, provider_type, max_tokens)
-    )
-    await db.commit()
-    return {"uuid": new_uuid}
-
-
-async def update_model_config(uuid: str, **kwargs) -> bool:
-    """更新模型配置。api_key 为空则保留原值。"""
-    if not kwargs:
-        return False
-
-    invalid = set(kwargs.keys()) - VALID_MODEL_COLUMNS
-    if invalid:
-        raise ValueError(f"Invalid columns: {invalid}")
-
-    existing = await get_model_config(uuid)
-    if not existing:
-        return False
-
-    if "api_key" in kwargs and not kwargs["api_key"]:
-        del kwargs["api_key"]
-    if "thinking" in kwargs:
-        kwargs["thinking"] = int(kwargs["thinking"])
-    if "enabled" in kwargs:
-        kwargs["enabled"] = int(kwargs["enabled"])
-    kwargs.pop("provider_type", None)
-    kwargs.pop("model", None)
-
-    if not kwargs:
-        return True
-
-    sets = ", ".join(f"{k}=?" for k in kwargs)
-    values = list(kwargs.values()) + [uuid]
-    db = await get_db()
-    cursor = await db.execute(f"UPDATE models SET {sets} WHERE uuid=?", values)
-    await db.commit()
-    return cursor.rowcount > 0
-
-
-async def delete_model_config(uuid: str) -> bool:
-    db = await get_db()
-    cursor = await db.execute("DELETE FROM models WHERE uuid=?", (uuid,))
-    await db.commit()
-    return cursor.rowcount > 0
-
-
-def _mask_key(key: str) -> str:
-    """掩码 API key，只显示前4位和后4位"""
-    if not key or len(key) < 12:
-        return "****" if key else ""
-    return f"{key[:4]}...{key[-4:]}"
 
 
 # ---- Problem 操作 ----
 
 async def sync_problems_from_disk():
-    """从文件系统全量同步题目到数据库（文件是权威来源）。
-    - 新题：分配 uuid 并插入
-    - 已有题：更新所有字段（保留 uuid 以维持 submissions 外键）
-    - 孤立 DB 条目（文件已删除）：保留，不删除（保护历史提交记录）
-    """
+    """从文件系统全量同步题目到数据库（id = 目录名，文件是权威来源）"""
     from .config import PROBLEMS_DIR
     if not PROBLEMS_DIR.exists():
         return
@@ -896,99 +749,55 @@ async def sync_problems_from_disk():
         except (json.JSONDecodeError, OSError) as e:
             _logger.warning(f"sync_problems_from_disk: skipping {d.name}: {e}")
             continue
-        slug = d.name
-        problem_id = meta.get("id", slug)
+        problem_id = d.name
         scoring = meta.get("scoring", {})
-        # 验证权重之和
         if scoring:
             total_weight = sum(v for v in scoring.values() if isinstance(v, (int, float)))
             if total_weight != 100:
-                _logger.warning(f"Problem {slug}: scoring weights sum to {total_weight}, expected 100")
-        existing = await db.execute_fetchall("SELECT uuid FROM problems WHERE slug=?", (slug,))
-        if existing:
-            # 更新已有记录（保留 uuid）
-            await db.execute(
-                """UPDATE problems SET id=?, title=?, difficulty=?, language=?, tags=?,
-                   compile_flags=?, timeout_seconds=?, scoring=?, has_benchmark=?,
-                   concurrent=?, perf_baseline_ms=? WHERE slug=?""",
-                (problem_id, meta.get("title", slug),
-                 meta.get("difficulty", "medium"), meta.get("language", "c"),
-                 json.dumps(meta.get("tags", [])), meta.get("compile_flags", ""),
-                 meta.get("timeout_seconds", 30), json.dumps(scoring),
-                 int(meta.get("has_benchmark", False)), int(meta.get("concurrent", True)),
-                 meta.get("perf_baseline_ms", 0), slug)
-            )
-        else:
-            new_uuid = f"p-{uuid.uuid4().hex[:12]}"
-            await db.execute(
-                """INSERT INTO problems
-                (uuid, slug, id, title, difficulty, language, tags, compile_flags,
-                 timeout_seconds, scoring, has_benchmark, concurrent, perf_baseline_ms)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (new_uuid, slug, problem_id, meta.get("title", slug),
-                 meta.get("difficulty", "medium"), meta.get("language", "c"),
-                 json.dumps(meta.get("tags", [])), meta.get("compile_flags", ""),
-                 meta.get("timeout_seconds", 30), json.dumps(scoring),
-                 int(meta.get("has_benchmark", False)), int(meta.get("concurrent", True)),
-                 meta.get("perf_baseline_ms", 0))
-            )
+                _logger.warning(f"Problem {problem_id}: scoring weights sum to {total_weight}, expected 100")
+        await db.execute(
+            """INSERT INTO problems (id, title, difficulty, language, tags, compile_flags,
+               timeout_seconds, concurrent, perf_baseline_ms, scoring)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(id) DO UPDATE SET
+                 title=excluded.title, difficulty=excluded.difficulty,
+                 language=excluded.language, tags=excluded.tags,
+                 compile_flags=excluded.compile_flags, timeout_seconds=excluded.timeout_seconds,
+                 concurrent=excluded.concurrent, perf_baseline_ms=excluded.perf_baseline_ms,
+                 scoring=excluded.scoring""",
+            (problem_id, meta.get("title", problem_id),
+             meta.get("difficulty", "medium"), meta.get("language", "c"),
+             json.dumps(meta.get("tags", [])), meta.get("compile_flags", ""),
+             meta.get("timeout_seconds", 30), int(meta.get("concurrent", True)),
+             meta.get("perf_baseline_ms", 0), json.dumps(scoring))
+        )
         synced += 1
     await db.commit()
     _logger.info(f"sync_problems_from_disk: synced {synced} problems")
 
 
 async def list_problems_db() -> list[dict]:
-    """列出所有题目（从数据库）"""
     db = await get_db()
-    rows = await db.execute_fetchall("SELECT * FROM problems ORDER BY slug")
+    async with db.execute("SELECT * FROM problems ORDER BY id") as cur:
+        rows = await cur.fetchall()
     result = []
     for r in rows:
         d = dict(r)
         d["tags"] = json.loads(d.get("tags", "[]"))
         d["scoring"] = json.loads(d.get("scoring", "{}"))
-        d["has_benchmark"] = bool(d.get("has_benchmark", 0))
         d["concurrent"] = bool(d.get("concurrent", 1))
         result.append(d)
     return result
 
 
-async def get_problem_by_uuid(puuid: str) -> Optional[dict]:
-    """通过 uuid 获取题目"""
+async def get_problem(problem_id: str) -> Optional[dict]:
     db = await get_db()
-    rows = await db.execute_fetchall("SELECT * FROM problems WHERE uuid=?", (puuid,))
-    if not rows:
+    async with db.execute("SELECT * FROM problems WHERE id=?", (problem_id,)) as cur:
+        row = await cur.fetchone()
+    if not row:
         return None
-    d = dict(rows[0])
+    d = dict(row)
     d["tags"] = json.loads(d.get("tags", "[]"))
     d["scoring"] = json.loads(d.get("scoring", "{}"))
-    d["has_benchmark"] = bool(d.get("has_benchmark", 0))
     d["concurrent"] = bool(d.get("concurrent", 1))
     return d
-
-
-async def get_problem_by_slug(slug: str) -> Optional[dict]:
-    """通过 slug（目录名）获取题目"""
-    db = await get_db()
-    rows = await db.execute_fetchall("SELECT * FROM problems WHERE slug=?", (slug,))
-    if not rows:
-        return None
-    d = dict(rows[0])
-    d["tags"] = json.loads(d.get("tags", "[]"))
-    d["scoring"] = json.loads(d.get("scoring", "{}"))
-    d["has_benchmark"] = bool(d.get("has_benchmark", 0))
-    d["concurrent"] = bool(d.get("concurrent", 1))
-    return d
-
-
-async def get_problem_uuid_by_slug(slug: str) -> Optional[str]:
-    """通过 slug 获取 uuid"""
-    db = await get_db()
-    rows = await db.execute_fetchall("SELECT uuid FROM problems WHERE slug=?", (slug,))
-    return rows[0]["uuid"] if rows else None
-
-
-async def get_problem_slug_by_uuid(puuid: str) -> Optional[str]:
-    """通过 uuid 获取 slug"""
-    db = await get_db()
-    rows = await db.execute_fetchall("SELECT slug FROM problems WHERE uuid=?", (puuid,))
-    return rows[0]["slug"] if rows else None
