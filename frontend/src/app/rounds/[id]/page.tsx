@@ -74,7 +74,7 @@ export default function RoundDetailPage({ params }: { params: { id: string } }) 
     fetchAPI<Problem[]>("/api/problems")
       .then((list) => {
         const m: Record<string, Problem> = {};
-        list.forEach((p) => { m[p.uuid] = p; });
+        list.forEach((p) => { m[p.id] = p; });
         setProblemMap(m);
       })
       .catch(() => {});
@@ -323,7 +323,7 @@ export default function RoundDetailPage({ params }: { params: { id: string } }) 
               {filtered.map((s) => {
                 const entry = leaderboard.find((e) => e.model_uuid === s.model_uuid);
                 return (
-                  <div key={s.id} className="bg-gray-900 border border-gray-800 rounded-lg p-4 flex items-center justify-between">
+                  <div key={`${s.round_id}:${s.problem_id}:${s.model_uuid}`} className="bg-gray-900 border border-gray-800 rounded-lg p-4 flex items-center justify-between">
                     <div>
                       <ModelBadge model={entry ? entry.model : "未知模型"} provider={entry?.provider || ""} thinking={entry?.thinking} />
                       <span className="text-gray-500 text-sm ml-3">{problemMap[s.problem_id]?.title || "未知题目"}</span>
