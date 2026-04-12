@@ -196,6 +196,7 @@ async def _attempt_gen_task(task: GenTask) -> bool:
                     token_usage=json.dumps(token_usage),
                     generation_duration=result.total_time,
                     agent_round=result.rounds,
+                    finish_reason=result.finish_reason,
                 )
                 logger.info(
                     f"[{task.model_uuid[:8]}] {task.problem_id}: generated "
@@ -204,11 +205,14 @@ async def _attempt_gen_task(task: GenTask) -> bool:
                 return True
             else:
                 error_msg = result.error if result else "no result"
+                finish_reason = (result.finish_reason if result else "") or "error"
                 await db.update_submission(
                     task.round_id, task.problem_id, task.model_uuid,
                     status="failed",
                     generation_error=f"no solution: {error_msg}",
+                    generation_history=json.dumps(result.history if result else [], ensure_ascii=False)[:200000],
                     generation_duration=result.total_time if result else 0,
+                    finish_reason=finish_reason,
                     finished_at=datetime.utcnow().isoformat(),
                 )
                 logger.warning(f"[{task.model_uuid[:8]}] {task.problem_id}: no solution ({error_msg})")
@@ -220,6 +224,7 @@ async def _attempt_gen_task(task: GenTask) -> bool:
                 task.round_id, task.problem_id, task.model_uuid,
                 status="failed",
                 generation_error=f"generation timed out ({GEN_TIMEOUT}s)",
+                finish_reason="timeout",
                 finished_at=datetime.utcnow().isoformat(),
             )
             return False
@@ -233,6 +238,7 @@ async def _attempt_gen_task(task: GenTask) -> bool:
                 task.round_id, task.problem_id, task.model_uuid,
                 status="failed",
                 generation_error=str(e)[:500],
+                finish_reason="error",
                 finished_at=datetime.utcnow().isoformat(),
             )
             return False

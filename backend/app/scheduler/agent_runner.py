@@ -507,6 +507,15 @@ async def run_agent(
                     result.finish_reason = "error"
                     break
             if resp is None:
+                # 记录失败轮次，方便诊断
+                result.history.append({
+                    "round": round_num,
+                    "time": round(time.time() - round_start, 1),
+                    "tool_calls": [],
+                    "thinking": "",
+                    "output": "",
+                    "note": f"LLM call failed: {result.error or result.finish_reason}",
+                })
                 break
 
             llm_time = time.time() - round_start

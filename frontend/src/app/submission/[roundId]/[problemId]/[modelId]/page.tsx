@@ -176,8 +176,16 @@ export default function SubmissionPage() {
             </span>
             <ModelBadge model="" provider={sub.model_provider || ""} thinking={sub.model_thinking} />
           </div>
-          <p className="text-gray-400">
-            {problemMap[sub.problem_id]?.title || "未知题目"} · {sub.status}
+          <p className="text-gray-400 flex items-center gap-2 flex-wrap">
+            <span>{problemMap[sub.problem_id]?.title || "未知题目"} · {sub.status}</span>
+            {sub.finish_reason && (
+              <span className={`text-xs px-2 py-0.5 rounded font-mono ${
+                sub.finish_reason === "submitted" ? "bg-green-900/50 text-green-300" :
+                sub.finish_reason === "timeout" ? "bg-yellow-900/50 text-yellow-300" :
+                sub.finish_reason === "max_rounds" ? "bg-blue-900/50 text-blue-300" :
+                "bg-red-900/50 text-red-300"
+              }`}>{sub.finish_reason}</span>
+            )}
           </p>
         </div>
 
@@ -261,6 +269,14 @@ export default function SubmissionPage() {
                   )}
                   {sub.generation_duration != null && (
                     <p>生成耗时: <span className="text-white font-mono">{sub.generation_duration.toFixed(1)}s</span></p>
+                  )}
+                  {sub.finish_reason && (
+                    <p>结束原因: <span className={`font-mono text-xs px-1.5 py-0.5 rounded ${
+                      sub.finish_reason === "submitted" ? "bg-green-900/50 text-green-300" :
+                      sub.finish_reason === "timeout" ? "bg-yellow-900/50 text-yellow-300" :
+                      sub.finish_reason === "max_rounds" ? "bg-blue-900/50 text-blue-300" :
+                      "bg-red-900/50 text-red-300"
+                    }`}>{sub.finish_reason}</span></p>
                   )}
                   {ev.error && (
                     <p>错误: <span className="text-red-400 font-mono text-xs">{ev.error}</span></p>
