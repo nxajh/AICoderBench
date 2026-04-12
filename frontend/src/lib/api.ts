@@ -167,6 +167,7 @@ export interface Submission {
   generation_duration: number;
   token_usage: Record<string, number>;
   generation_error: string;
+  finish_reason: string;
   eval_result: EvalResult | null;
   score_breakdown: ScoreBreakdown | null;
   total_score: number;

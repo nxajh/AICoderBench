@@ -19,7 +19,7 @@ VALID_SUBMISSION_COLUMNS = {
     "status", "generated_code", "used_tool_call",
     "generation_error", "eval_result", "total_score", "score_breakdown",
     "created_at", "finished_at", "generation_duration", "token_usage",
-    "agent_round", "generation_history",
+    "agent_round", "generation_history", "finish_reason",
 }
 
 VALID_MODEL_COLUMNS = {
@@ -97,6 +97,7 @@ async def init_db():
             generation_duration REAL DEFAULT 0,
             token_usage         TEXT DEFAULT '{}',
             generation_error    TEXT DEFAULT '',
+            finish_reason       TEXT DEFAULT '',
             eval_result         TEXT DEFAULT '{}',
             score_breakdown     TEXT DEFAULT '{}',
             total_score         INTEGER DEFAULT 0,
@@ -113,6 +114,13 @@ async def init_db():
     await db.execute("PRAGMA journal_mode=WAL")
     await db.execute("PRAGMA busy_timeout=5000")
     await db.commit()
+
+    # 迁移：为已有数据库添加缺失列
+    try:
+        await db.execute("ALTER TABLE submissions ADD COLUMN finish_reason TEXT DEFAULT ''")
+        await db.commit()
+    except Exception:
+        pass  # 列已存在，忽略
 
     await sync_problems_from_disk()
 
