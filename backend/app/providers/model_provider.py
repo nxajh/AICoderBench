@@ -244,11 +244,14 @@ class AnthropicProvider(ModelProvider):
             elif role == "assistant":
                 tool_calls = m.get("tool_calls", [])
                 text = m.get("content") or ""
-                thinking = m.get("reasoning_content") or ""
                 content_blocks: list[dict] = []
-                # thinking block 必须在 text 之前（Anthropic 要求）
-                if thinking:
-                    content_blocks.append({"type": "thinking", "thinking": thinking})
+                # thinking blocks 必须在 text/tool_use 之前（Anthropic 要求）
+                # 优先使用保留了 signature 的原始 blocks，回退到纯文本重建
+                raw_thinking_blocks = m.get("thinking_blocks")
+                if raw_thinking_blocks:
+                    content_blocks.extend(raw_thinking_blocks)
+                elif m.get("reasoning_content"):
+                    content_blocks.append({"type": "thinking", "thinking": m["reasoning_content"]})
                 if text:
                     content_blocks.append({"type": "text", "text": text})
                 for tc in tool_calls:
@@ -331,7 +334,7 @@ class AnthropicProvider(ModelProvider):
         """将 Anthropic 响应转为与 OpenAI 兼容的内部格式"""
         content_blocks = raw.get("content", [])
         text_parts = []
-        thinking_parts = []
+        thinking_blocks: list[dict] = []   # 保留完整 block（含 signature）
         tool_calls = []
 
         for block in content_blocks:
@@ -339,7 +342,12 @@ class AnthropicProvider(ModelProvider):
             if btype == "text":
                 text_parts.append(block.get("text", ""))
             elif btype == "thinking":
-                thinking_parts.append(block.get("thinking", ""))
+                # 保留完整 block，包括 Anthropic 要求在多轮对话中回传的 signature
+                thinking_blocks.append({
+                    "type": "thinking",
+                    "thinking": block.get("thinking", ""),
+                    "signature": block.get("signature", ""),
+                })
             elif btype == "tool_use":
                 tool_calls.append({
                     "id": block.get("id", ""),
@@ -353,8 +361,11 @@ class AnthropicProvider(ModelProvider):
         message: dict = {"role": "assistant", "content": "\n".join(text_parts)}
         if tool_calls:
             message["tool_calls"] = tool_calls
-        if thinking_parts:
-            message["reasoning_content"] = "\n".join(thinking_parts)
+        if thinking_blocks:
+            # thinking_blocks 用于多轮回传（含 signature）
+            # reasoning_content 仅供 agent_runner 提取可读文本用于 history 记录
+            message["thinking_blocks"] = thinking_blocks
+            message["reasoning_content"] = "\n".join(b["thinking"] for b in thinking_blocks)
 
         usage = raw.get("usage", {})
         return {
