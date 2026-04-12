@@ -451,6 +451,8 @@ async def run_agent(
 
     submitted = False
     no_tool_call_streak = 0
+    last_tool_sig: tuple | None = None   # Fix #31: 重复工具调用检测
+    repeat_tool_count = 0
 
     try:
         for round_num in range(1, MAX_ROUNDS + 1):
@@ -616,92 +618,109 @@ async def run_agent(
                 tool_result = ""
                 tc_record = {"tool": fn_name}
 
-                if fn_name == "write_file":
-                    command = fn_args.get("command", "")
-                    fpath = fn_args.get("path", "")
-                    if not command or not fpath:
-                        tool_result = "Error: command and path are required"
-                    else:
-                        safe = _safe_path(sandbox, fpath)
-                        if safe is None:
-                            tool_result = "Error: path escapes sandbox directory"
-                        elif command == "create":
-                            if safe.exists():
-                                tool_result = f"Error: {fpath} already exists, use str_replace to modify it"
-                            else:
-                                content = fn_args.get("content", "")
-                                safe.parent.mkdir(parents=True, exist_ok=True)
-                                safe.write_text(content)
-                                result.files[fpath] = content
-                                tool_result = f"File {fpath} created ({len(content)} bytes, {len(content.splitlines())} lines)"
-                                tc_record["file"] = fpath
-                                tc_record["size"] = len(content)
-                        elif command == "str_replace":
-                            if not safe.exists():
-                                tool_result = f"Error: {fpath} not found, use create to create it first"
-                            else:
-                                old_string = fn_args.get("old_string", "")
-                                new_string = fn_args.get("new_string", "")
-                                if not old_string:
-                                    tool_result = "Error: old_string is required for str_replace"
+                try:
+                    if fn_name == "write_file":
+                        command = fn_args.get("command", "")
+                        fpath = fn_args.get("path", "")
+                        if not command or not fpath:
+                            tool_result = "Error: command and path are required"
+                        else:
+                            safe = _safe_path(sandbox, fpath)
+                            if safe is None:
+                                tool_result = "Error: path escapes sandbox directory"
+                            elif command == "create":
+                                if safe.exists():
+                                    tool_result = f"Error: {fpath} already exists, use str_replace to modify it"
                                 else:
-                                    current = safe.read_text()
-                                    count = current.count(old_string)
-                                    if count == 0:
-                                        tool_result = f"Error: old_string not found in {fpath}"
-                                    elif count > 1:
-                                        tool_result = f"Error: old_string found {count} times in {fpath}, must be unique. Include more surrounding context."
+                                    content = fn_args.get("content", "")
+                                    safe.parent.mkdir(parents=True, exist_ok=True)
+                                    safe.write_text(content)
+                                    result.files[fpath] = content
+                                    tool_result = f"File {fpath} created ({len(content)} bytes, {len(content.splitlines())} lines)"
+                                    tc_record["file"] = fpath
+                                    tc_record["size"] = len(content)
+                            elif command == "str_replace":
+                                if not safe.exists():
+                                    tool_result = f"Error: {fpath} not found, use create to create it first"
+                                else:
+                                    old_string = fn_args.get("old_string", "")
+                                    new_string = fn_args.get("new_string", "")
+                                    if not old_string:
+                                        tool_result = "Error: old_string is required for str_replace"
                                     else:
-                                        new_content = current.replace(old_string, new_string, 1)
-                                        safe.write_text(new_content)
-                                        result.files[fpath] = new_content
-                                        tool_result = f"File {fpath} updated ({len(new_content)} bytes, {len(new_content.splitlines())} lines)"
-                                        tc_record["file"] = fpath
-                                        tc_record["size"] = len(new_content)
-                        else:
-                            tool_result = f"Error: unknown command '{command}', use 'create' or 'str_replace'"
-
-                elif fn_name == "read_file":
-                    fpath = fn_args.get("path", "")
-                    if not fpath:
-                        tool_result = "Error: path is required"
-                    else:
-                        safe = _safe_path(sandbox, fpath)
-                        if safe is None:
-                            tool_result = "Error: path escapes sandbox directory"
-                        elif safe.exists():
-                            content = safe.read_text()
-                            start_line = fn_args.get("start_line")
-                            end_line = fn_args.get("end_line")
-                            if start_line is not None or end_line is not None:
-                                lines = content.splitlines(keepends=True)
-                                total = len(lines)
-                                s = max(0, (start_line - 1) if start_line else 0)
-                                e = min(total, end_line if end_line else total)
-                                tool_result = f"[Lines {s+1}-{e} of {total}]\n" + "".join(lines[s:e])
+                                        current = safe.read_text()
+                                        count = current.count(old_string)
+                                        if count == 0:
+                                            tool_result = f"Error: old_string not found in {fpath}"
+                                        elif count > 1:
+                                            tool_result = f"Error: old_string found {count} times in {fpath}, must be unique. Include more surrounding context."
+                                        else:
+                                            new_content = current.replace(old_string, new_string, 1)
+                                            safe.write_text(new_content)
+                                            result.files[fpath] = new_content
+                                            tool_result = f"File {fpath} updated ({len(new_content)} bytes, {len(new_content.splitlines())} lines)"
+                                            tc_record["file"] = fpath
+                                            tc_record["size"] = len(new_content)
                             else:
-                                tool_result = content
+                                tool_result = f"Error: unknown command '{command}', use 'create' or 'str_replace'"
+
+                    elif fn_name == "read_file":
+                        fpath = fn_args.get("path", "")
+                        tc_record["file"] = fpath
+                        if not fpath:
+                            tool_result = "Error: path is required"
                         else:
-                            tool_result = f"Error: file {fpath} not found"
-                    tc_record["file"] = fpath
+                            safe = _safe_path(sandbox, fpath)
+                            if safe is None:
+                                tool_result = "Error: path escapes sandbox directory"
+                            elif not safe.exists():
+                                tool_result = f"Error: file {fpath} not found"
+                            elif safe.is_dir():
+                                # Fix #30: 目录路径不能用 read_text，需明确拒绝
+                                tool_result = f"Error: {fpath} is a directory, not a file. Please specify a file path such as solution.h"
+                            else:
+                                content = safe.read_text()
+                                start_line = fn_args.get("start_line")
+                                end_line = fn_args.get("end_line")
+                                if start_line is not None or end_line is not None:
+                                    lines = content.splitlines(keepends=True)
+                                    total = len(lines)
+                                    s = max(0, (start_line - 1) if start_line else 0)
+                                    e = min(total, end_line if end_line else total)
+                                    tool_result = f"[Lines {s+1}-{e} of {total}]\n" + "".join(lines[s:e])
+                                else:
+                                    tool_result = content
 
-                elif fn_name == "compile":
-                    comp = await _do_compile(sandbox, compile_flags)
-                    tool_result = json.dumps(comp, ensure_ascii=False)
-                    tc_record["compile_success"] = comp.get("success", False)
+                    elif fn_name == "compile":
+                        comp = await _do_compile(sandbox, compile_flags)
+                        tool_result = json.dumps(comp, ensure_ascii=False)
+                        tc_record["compile_success"] = comp.get("success", False)
 
-                elif fn_name == "run_tests":
-                    run = await _do_run_tests(sandbox, compile_flags)
-                    tool_result = json.dumps(run, ensure_ascii=False)
-                    tc_record["test_success"] = run.get("success", False)
+                    elif fn_name == "run_tests":
+                        run = await _do_run_tests(sandbox, compile_flags)
+                        tool_result = json.dumps(run, ensure_ascii=False)
+                        tc_record["test_success"] = run.get("success", False)
 
-                elif fn_name == "submit":
-                    submitted = True
-                    tool_result = "Code submitted for evaluation."
-                    tc_record["submitted"] = True
+                    elif fn_name == "submit":
+                        submitted = True
+                        tool_result = "Code submitted for evaluation."
+                        tc_record["submitted"] = True
 
+                    else:
+                        tool_result = f"Unknown tool: {fn_name}"
+
+                except Exception as tool_err:
+                    # Fix #30: 捕获所有工具执行异常，转为错误消息而非崩溃
+                    logger.warning(f"[agent] Round {round_num}: tool {fn_name} raised exception: {tool_err}")
+                    tool_result = f"Error executing {fn_name}: {tool_err}"
+
+                # Fix #31: 重复相同工具调用检测
+                sig = (fn_name, fn_args_str)
+                if sig == last_tool_sig:
+                    repeat_tool_count += 1
                 else:
-                    tool_result = f"Unknown tool: {fn_name}"
+                    repeat_tool_count = 0
+                    last_tool_sig = sig
 
                 # 把 tool result 加入 messages（截断防止超出上下文）
                 messages.append({
@@ -719,6 +738,23 @@ async def run_agent(
             if submitted:
                 result.finish_reason = "submitted"
                 break
+
+            # Fix #31: 连续 5 次完全相同的工具调用，注入提示打破死循环
+            if repeat_tool_count >= 5:
+                logger.warning(
+                    f"[agent] Round {round_num}: detected {repeat_tool_count} consecutive identical "
+                    f"calls to {last_tool_sig[0] if last_tool_sig else '?'}, injecting nudge"
+                )
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "你已经连续多次执行相同的操作，这是无效的。"
+                        "请立即用 write_file(create) 写入 solution.c，然后调用 compile() 编译，"
+                        "通过后调用 submit() 提交。不要再重复读取文件。"
+                    ),
+                })
+                repeat_tool_count = 0
+                last_tool_sig = None
 
         else:
             result.finish_reason = "max_rounds"
